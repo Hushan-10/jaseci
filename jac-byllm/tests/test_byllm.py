@@ -367,9 +367,11 @@ def test_max_react_iterations(fixture_path: Callable[[str], str]) -> None:
     jac_import("react_max_iterations_test", base_path=fixture_path("./"))
     sys.stdout = sys.__stdout__
     stdout_value = captured_output.getvalue()
-    assert "get_live_wind_speed called for Puttalam"  in stdout_value
+    assert "get_live_wind_speed called for Puttalam" in stdout_value
     assert "get_speed_unit called" in stdout_value
     assert "RESULT: FINAL_REPORT" in stdout_value
     assert "WIND_TOOL_CALLS: 1" in stdout_value
     assert "UNIT_TOOL_CALLS: 1" in stdout_value
-    assert "Be comprehensive and synthesize all the information gathered." in stdout_value
+    assert (
+        "Be comprehensive and synthesize all the information gathered." in stdout_value
+    )
