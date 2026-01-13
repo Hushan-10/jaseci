@@ -359,6 +359,7 @@ def test_visit_by_for_routing(fixture_path: Callable[[str], str]) -> None:
     assert "Agentic minds, we hold dear" in stdout_value
     assert "Math Result: 35" in stdout_value
 
+
 def test_max_react_iterations(fixture_path: Callable[[str], str]) -> None:
     """Test that max_react_iterations stops ReAct tool loop and forces a final answer."""
     captured_output = io.StringIO()
