@@ -27,7 +27,6 @@ impl BaseLLM.invoke(mtir: MTRuntime) -> object {
     # Invoke the LLM and handle tool calls (ReAct loop).
     while True {
         iter_count += 1;
-
         if int(max_iters) > 0 and iter_count > int(max_iters) {
             # If streaming, reuse the existing streaming final-answer path
             if mtir.stream {

@@ -364,18 +364,12 @@ def test_max_react_iterations(fixture_path: Callable[[str], str]) -> None:
     """Test that max_react_iterations stops ReAct tool loop and forces a final answer."""
     captured_output = io.StringIO()
     sys.stdout = captured_output
-
     jac_import("react_max_iterations_test", base_path=fixture_path("./"))
-
     sys.stdout = sys.__stdout__
     stdout_value = captured_output.getvalue()
-
-    # Tool should run once
-    assert "get_live_wind_speed called for Puttalam" in stdout_value
-    assert "get_speed_unit called" not in stdout_value
-    # Final output should come from forced final-answer path
+    assert "get_live_wind_speed called for Puttalam"  in stdout_value
+    assert "get_speed_unit called" in stdout_value
     assert "RESULT: FINAL_REPORT" in stdout_value
-
-    # Tool call counter should confirm it
     assert "WIND_TOOL_CALLS: 1" in stdout_value
-    assert "UNIT_TOOL_CALLS: 0" in stdout_value
+    assert "UNIT_TOOL_CALLS: 1" in stdout_value
+    assert "Be comprehensive and synthesize all the information gathered." in stdout_value
