@@ -363,7 +363,7 @@ def test_visit_by_for_routing(fixture_path: Callable[[str], str]) -> None:
 def test_max_react_iterations(fixture_path: Callable[[str], str]) -> None:
     """Test that max_react_iterations stops ReAct tool loop and forces a final answer."""
     captured_output = io.StringIO()
-    sys.stdout = captured_output 
+    sys.stdout = captured_output
 
     jac_import("react_max_iterations_test", base_path=fixture_path("./"))
 
