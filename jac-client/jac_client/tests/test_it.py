@@ -21,6 +21,18 @@ import pytest
 from jaclang.pycore.runtime import JacRuntime as Jac
 
 
+def get_free_port() -> int:
+    """Get a free port by binding to port 0 and releasing it.
+
+    This ensures each test instance gets a unique port when running in parallel.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.listen(1)
+        port = s.getsockname()[1]
+    return port
+
+
 def _get_jac_command() -> list[str]:
     """Get the jac command with proper path handling."""
     jac_path = shutil.which("jac")
@@ -240,23 +252,31 @@ def test_all_in_one_app_endpoints() -> None:
                     f"STDERR:\n{jac_add_result.stderr}\n"
                 )
 
-            app_jac_path = os.path.join(project_path, "src", "app.jac")
-            assert os.path.isfile(app_jac_path), "all-in-one src/app.jac file missing"
+            app_jac_path = os.path.join(project_path, "main.jac")
+            assert os.path.isfile(app_jac_path), "all-in-one main.jac file missing"
 
-            # 4. Start the server: `jac start src/app.jac`
+            # 4. Start the server: `jac start main.jac`
             # NOTE: We don't use text mode here, so `Popen` defaults to bytes.
             # Use `Popen[bytes]` in the type annotation to keep mypy happy.
             server: Popen[bytes] | None = None
+            # Use dynamic port allocation to avoid conflicts when running tests in parallel
+            server_port = get_free_port()
             try:
-                print("[DEBUG] Starting server with 'jac start src/app.jac'")
+                print(
+                    f"[DEBUG] Starting server with 'jac start main.jac -p {server_port}'"
+                )
                 server = Popen(
-                    ["jac", "start", "src/app.jac"],
+                    ["jac", "start", "main.jac", "-p", str(server_port)],
                     cwd=project_path,
                 )
                 # Wait for localhost:8000 to become available
-                print("[DEBUG] Waiting for server to be available on 127.0.0.1:8000")
-                _wait_for_port("127.0.0.1", 8000, timeout=90.0)
-                print("[DEBUG] Server is now accepting connections on 127.0.0.1:8000")
+                print(
+                    f"[DEBUG] Waiting for server to be available on 127.0.0.1:{server_port}"
+                )
+                _wait_for_port("127.0.0.1", server_port, timeout=90.0)
+                print(
+                    f"[DEBUG] Server is now accepting connections on 127.0.0.1:{server_port}"
+                )
 
                 # "/" – server up (serves client app HTML due to base_route_app="app")
                 # Note: The root endpoint may return 503 while the client bundle is building.
@@ -264,7 +284,7 @@ def test_all_in_one_app_endpoints() -> None:
                 try:
                     print("[DEBUG] Sending GET request to root endpoint / (with retry)")
                     root_bytes = _wait_for_endpoint(
-                        "http://127.0.0.1:8000",
+                        f"http://127.0.0.1:{server_port}",
                         timeout=120.0,
                         poll_interval=2.0,
                         request_timeout=30.0,
@@ -290,7 +310,7 @@ def test_all_in_one_app_endpoints() -> None:
                         "[DEBUG] Sending GET request to /cl/app endpoint (with retry)"
                     )
                     page_bytes = _wait_for_endpoint(
-                        "http://127.0.0.1:8000/cl/app",
+                        f"http://127.0.0.1:{server_port}/cl/app",
                         timeout=120.0,
                         poll_interval=2.0,
                         request_timeout=30.0,
@@ -310,7 +330,7 @@ def test_all_in_one_app_endpoints() -> None:
                 try:
                     print("[DEBUG] Sending GET request to /cl/app#/nested endpoint")
                     with urlopen(
-                        "http://127.0.0.1:8000/cl/app#/nested",
+                        f"http://127.0.0.1:{server_port}/cl/app#/nested",
                         timeout=200,
                     ) as resp_nested:
                         nested_body = resp_nested.read().decode(
@@ -336,7 +356,7 @@ def test_all_in_one_app_endpoints() -> None:
                 try:
                     print("[DEBUG] Sending GET request to /static/assets/burger.png")
                     with urlopen(
-                        "http://127.0.0.1:8000/static/assets/burger.png",
+                        f"http://127.0.0.1:{server_port}/static/assets/burger.png",
                         timeout=20,
                     ) as resp_png:
                         png_bytes = resp_png.read()
@@ -362,7 +382,7 @@ def test_all_in_one_app_endpoints() -> None:
                         "[DEBUG] Sending GET request to /workers/worker.js (with retry)"
                     )
                     worker_js_bytes = _wait_for_endpoint(
-                        "http://127.0.0.1:8000/workers/worker.js",
+                        f"http://127.0.0.1:{server_port}/workers/worker.js",
                         timeout=60.0,
                         poll_interval=2.0,
                         request_timeout=20.0,
@@ -384,13 +404,18 @@ def test_all_in_one_app_endpoints() -> None:
                         f"Failed to GET /workers/worker.js after retries: {exc}"
                     )
 
-                # "/walker/get_server_message" – walkers are integrated and up and running
+                # POST /walker/get_server_message – walkers are integrated and up and running
                 try:
-                    print("[DEBUG] Sending GET request to /walker/get_server_message")
-                    with urlopen(
-                        "http://127.0.0.1:8000/walker/get_server_message",
-                        timeout=20,
-                    ) as resp_walker:
+                    print(
+                        "[DEBUG] Sending POST request to /walker/get_server_message endpoint"
+                    )
+                    req = Request(
+                        f"http://127.0.0.1:{server_port}/walker/get_server_message",
+                        data=json.dumps({}).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    with urlopen(req, timeout=20) as resp_walker:
                         walker_body = resp_walker.read().decode(
                             "utf-8", errors="ignore"
                         )
@@ -400,12 +425,13 @@ def test_all_in_one_app_endpoints() -> None:
                             f"Body (truncated to 500 chars):\n{walker_body[:500]}"
                         )
                         assert resp_walker.status == 200
-                        assert "get_server_message" in walker_body
-                except (URLError, HTTPError) as exc:
+                        # The walker reports "hello from a basic walker!"
+                        assert "hello from a basic walker" in walker_body.lower()
+                except (URLError, HTTPError, RemoteDisconnected) as exc:
                     print(
                         f"[DEBUG] Error while requesting /walker/get_server_message: {exc}"
                     )
-                    pytest.fail("Failed to GET /walker/get_server_message")
+                    pytest.fail("Failed to POST /walker/get_server_message")
 
                 # POST /walker/create_todo – create a Todo via walker HTTP API
                 try:
@@ -416,7 +442,7 @@ def test_all_in_one_app_endpoints() -> None:
                         "text": "Sample todo from all-in-one app",
                     }
                     req = Request(
-                        "http://127.0.0.1:8000/walker/create_todo",
+                        f"http://127.0.0.1:{server_port}/walker/create_todo",
                         data=json.dumps(payload).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -447,7 +473,7 @@ def test_all_in_one_app_endpoints() -> None:
                         "password": test_password,
                     }
                     req_register = Request(
-                        "http://127.0.0.1:8000/user/register",
+                        f"http://127.0.0.1:{server_port}/user/register",
                         data=json.dumps(register_payload).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -462,7 +488,9 @@ def test_all_in_one_app_endpoints() -> None:
                             f"Body (truncated to 500 chars):\n{register_body[:500]}"
                         )
                         assert resp_register.status == 201
-                        register_data = json.loads(register_body)
+                        register_response = json.loads(register_body)
+                        # Handle new TransportResponse envelope format
+                        register_data = register_response.get("data", register_response)
                         assert "username" in register_data
                         assert "token" in register_data
                         assert "root_id" in register_data
@@ -486,7 +514,7 @@ def test_all_in_one_app_endpoints() -> None:
                         "password": test_password,
                     }
                     req_login = Request(
-                        "http://127.0.0.1:8000/user/login",
+                        f"http://127.0.0.1:{server_port}/user/login",
                         data=json.dumps(login_payload).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -499,7 +527,9 @@ def test_all_in_one_app_endpoints() -> None:
                             f"Body (truncated to 500 chars):\n{login_body[:500]}"
                         )
                         assert resp_login.status == 200
-                        login_data = json.loads(login_body)
+                        login_response = json.loads(login_body)
+                        # Handle new TransportResponse envelope format
+                        login_data = login_response.get("data", login_response)
                         assert "token" in login_data
                         assert len(login_data["token"]) > 0
                         print(
@@ -520,7 +550,7 @@ def test_all_in_one_app_endpoints() -> None:
                         "password": "wrong_password",
                     }
                     req_invalid_login = Request(
-                        "http://127.0.0.1:8000/user/login",
+                        f"http://127.0.0.1:{server_port}/user/login",
                         data=json.dumps(invalid_login_payload).encode("utf-8"),
                         headers={"Content-Type": "application/json"},
                         method="POST",
@@ -703,18 +733,24 @@ def test_default_client_app_renders() -> None:
 
             # 3. Start the server (now uses main.jac at project root)
             server: Popen[bytes] | None = None
+            # Use dynamic port allocation to avoid conflicts when running tests in parallel
+            server_port = get_free_port()
             try:
-                print("[DEBUG] Starting server with 'jac start main.jac'")
+                print(
+                    f"[DEBUG] Starting server with 'jac start main.jac -p {server_port}'"
+                )
                 server = Popen(
-                    [*jac_cmd, "start", "main.jac"],
+                    [*jac_cmd, "start", "main.jac", "-p", str(server_port)],
                     cwd=project_path,
                     env=env,
                 )
 
                 # Wait for server to be ready
-                print("[DEBUG] Waiting for server on 127.0.0.1:8000")
-                _wait_for_port("127.0.0.1", 8000, timeout=90.0)
-                print("[DEBUG] Server is accepting connections")
+                print(f"[DEBUG] Waiting for server on 127.0.0.1:{server_port}")
+                _wait_for_port("127.0.0.1", server_port, timeout=90.0)
+                print(
+                    f"[DEBUG] Server is accepting connections on 127.0.0.1:{server_port}"
+                )
 
                 # 4. Test root endpoint - for client-only apps, root serves the HTML app
                 # Note: The root endpoint may return 503 while the client bundle is building.
@@ -722,7 +758,7 @@ def test_default_client_app_renders() -> None:
                 try:
                     print("[DEBUG] Testing root endpoint / (with retry)")
                     root_bytes = _wait_for_endpoint(
-                        "http://127.0.0.1:8000",
+                        f"http://127.0.0.1:{server_port}",
                         timeout=120.0,
                         poll_interval=2.0,
                         request_timeout=30.0,
@@ -746,7 +782,7 @@ def test_default_client_app_renders() -> None:
                 try:
                     print("[DEBUG] Testing client app endpoint /cl/app")
                     page_bytes = _wait_for_endpoint(
-                        "http://127.0.0.1:8000/cl/app",
+                        f"http://127.0.0.1:{server_port}/cl/app",
                         timeout=120.0,
                         poll_interval=2.0,
                         request_timeout=30.0,
@@ -782,7 +818,7 @@ def test_default_client_app_renders() -> None:
                     )
                     if script_match:
                         js_path = script_match.group(1)
-                        js_url = f"http://127.0.0.1:8000{js_path}"
+                        js_url = f"http://127.0.0.1:{server_port}{js_path}"
                         print(f"[DEBUG] Fetching JS bundle from {js_url}")
                         with urlopen(js_url, timeout=30) as resp:
                             js_body = resp.read().decode("utf-8", errors="ignore")

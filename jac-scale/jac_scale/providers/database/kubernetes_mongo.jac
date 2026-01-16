@@ -118,7 +118,20 @@ class KubernetesMongoProvider(DatabaseProvider) {
     }
 
     def cleanup(self: KubernetesMongoProvider) -> None {
-        # Cleanup is handled by the deployment target
-        pass;
+    # Cleanup is handled by the deployment target
+    }
+
+    override def get_init_container(
+        self: KubernetesMongoProvider, app_name: str, wait_image: str
+    ) -> (dict[(str, Any)] | None) {
+        return {
+            'name': 'wait-for-mongodb',
+            'image': wait_image,
+            'command': [
+                'sh',
+                '-c',
+                f"until nc -z {app_name}-mongodb-service 27017; do echo waiting for mongodb; sleep 3; done"
+            ]
+        };
     }
 }
