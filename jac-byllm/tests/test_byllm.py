@@ -373,5 +373,6 @@ def test_max_react_iterations(fixture_path: Callable[[str], str]) -> None:
     assert "WIND_TOOL_CALLS: 1" in stdout_value
     assert "UNIT_TOOL_CALLS: 1" in stdout_value
     assert (
-        "Based on the tool calls and their results above, provide only your final answer." in stdout_value
+        "Based on the tool calls and their results above, provide only your final answer."
+        in stdout_value
     )
