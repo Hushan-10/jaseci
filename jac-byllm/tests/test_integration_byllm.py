@@ -17,9 +17,8 @@ import shutil
 import socket
 import sys
 import time
-from http.client import RemoteDisconnected
-from subprocess import PIPE, Popen
-from urllib.error import HTTPError, URLError
+from subprocess import Popen
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
@@ -61,16 +60,16 @@ class TestByllmServerStart:
 
     def test_server_starts_successfully(self) -> None:
         """Verify that jac start main.jac starts the server successfully.
-        
+
         This test:
         1. Locates the integration_byllm fixture directory
         2. Starts the server using `jac start main.jac -p <port>`
         3. Waits for the server to accept connections
         4. Verifies the server is running
         5. Cleans up by terminating the server
-        
+
         This is the foundation test - if this passes, the server infrastructure works.
-        
+
         NOTE: Requires OPENAI_API_KEY environment variable to be set.
         """
         # Skip test if OPENAI_API_KEY is not set
@@ -97,7 +96,7 @@ class TestByllmServerStart:
 
             try:
                 wait_for_port("127.0.0.1", server_port, timeout=60.0)
-                print(f"[DEBUG] ✅ Server is accepting connections")
+                print("[DEBUG] ✅ Server is accepting connections")
             except TimeoutError:
                 poll_result = server.poll()
                 if poll_result is not None:
@@ -124,13 +123,13 @@ class TestByllmWalkerEndpoints:
 
     def test_supervisor_walker_endpoint(self) -> None:
         """Test calling the Supervisor walker via HTTP POST endpoint.
-        
+
         This test:
         1. Starts the server with walker HTTP endpoints
         2. Calls POST /walker/Supervisor with a query
         3. Verifies the routing works (selects correct agent)
         4. Verifies the agent response is returned correctly
-        
+
         NOTE: Requires OPENAI_API_KEY environment variable to be set.
         """
         # Skip test if OPENAI_API_KEY is not set
@@ -156,28 +155,28 @@ class TestByllmWalkerEndpoints:
             print(f"[DEBUG] Server started on port {server_port}")
 
             wait_for_port("127.0.0.1", server_port, timeout=60.0)
-            print(f"[DEBUG] ✅ Server is accepting connections")
+            print("[DEBUG] ✅ Server is accepting connections")
 
             # Test POST /walker/Supervisor endpoint with different query types
             print("[DEBUG] Testing POST /walker/Supervisor endpoint\n")
-            
+
             # Test Case 1: ConceptAgent query
             print("[DEBUG] Test Case 1: ConceptAgent query")
             concept_payload = {"query": "Explain machine learning in simple terms"}
-            
+
             req = Request(
                 f"http://127.0.0.1:{server_port}/walker/Supervisor",
                 data=json.dumps(concept_payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            
+
             try:
                 with urlopen(req, timeout=90) as resp:
                     response_body = resp.read().decode("utf-8", errors="ignore")
                     assert resp.status == 200, f"Expected 200, got {resp.status}"
                     response_data = json.loads(response_body)
-                    
+
                     if "reports" in response_data:
                         reports = response_data["reports"]
                         assert len(reports) > 0, "Should have at least one report"
@@ -185,33 +184,37 @@ class TestByllmWalkerEndpoints:
                         assert agent_report["agent"] == "ConceptAgent", (
                             f"Expected ConceptAgent, got {agent_report.get('agent')}"
                         )
-                        assert len(agent_report["response"]) > 0, "Response should not be empty"
-                        print(f"[DEBUG] ✅ ConceptAgent selected correctly")
+                        assert len(agent_report["response"]) > 0, (
+                            "Response should not be empty"
+                        )
+                        print("[DEBUG] ✅ ConceptAgent selected correctly")
                     else:
                         assert len(response_data) > 0, "Response should not be empty"
                         print("[DEBUG] ✅ Received valid response")
-                    
+
             except HTTPError as exc:
-                error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+                error_body = (
+                    exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+                )
                 pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}")
 
             # Test Case 2: MathAgent query
             print("\n[DEBUG] Test Case 2: MathAgent query")
             math_payload = {"query": "What is (15 + 5) * 2 - (10 / 2)?"}
-            
+
             req = Request(
                 f"http://127.0.0.1:{server_port}/walker/Supervisor",
                 data=json.dumps(math_payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            
+
             try:
                 with urlopen(req, timeout=90) as resp:
                     response_body = resp.read().decode("utf-8", errors="ignore")
                     assert resp.status == 200, f"Expected 200, got {resp.status}"
                     response_data = json.loads(response_body)
-                    
+
                     if "reports" in response_data:
                         reports = response_data["reports"]
                         assert len(reports) > 0, "Should have at least one report"
@@ -219,33 +222,39 @@ class TestByllmWalkerEndpoints:
                         assert agent_report["agent"] == "MathAgent", (
                             f"Expected MathAgent, got {agent_report.get('agent')}"
                         )
-                        assert len(agent_report["response"]) > 0, "Response should not be empty"
-                        print(f"[DEBUG] ✅ MathAgent selected correctly")
+                        assert len(agent_report["response"]) > 0, (
+                            "Response should not be empty"
+                        )
+                        print("[DEBUG] ✅ MathAgent selected correctly")
                     else:
                         assert len(response_data) > 0, "Response should not be empty"
                         print("[DEBUG] ✅ Received valid response")
-                    
+
             except HTTPError as exc:
-                error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+                error_body = (
+                    exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+                )
                 pytest.fail(f"MathAgent test failed: {exc.code}\n{error_body}")
 
             # Test Case 3: ResearchAgent query
             print("\n[DEBUG] Test Case 3: ResearchAgent query")
-            research_payload = {"query": "Compare supervised fine-tuning and prompt engineering in large language models"}
-            
+            research_payload = {
+                "query": "Compare supervised fine-tuning and prompt engineering in large language models"
+            }
+
             req = Request(
                 f"http://127.0.0.1:{server_port}/walker/Supervisor",
                 data=json.dumps(research_payload).encode("utf-8"),
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            
+
             try:
                 with urlopen(req, timeout=90) as resp:
                     response_body = resp.read().decode("utf-8", errors="ignore")
                     assert resp.status == 200, f"Expected 200, got {resp.status}"
                     response_data = json.loads(response_body)
-                    
+
                     if "reports" in response_data:
                         reports = response_data["reports"]
                         assert len(reports) > 0, "Should have at least one report"
@@ -255,14 +264,18 @@ class TestByllmWalkerEndpoints:
                         )
                         # ResearchAgent returns different fields
                         assert "summary" in agent_report, "Should have summary field"
-                        assert len(agent_report["summary"]) > 0, "Summary should not be empty"
-                        print(f"[DEBUG] ✅ ResearchAgent selected correctly")
+                        assert len(agent_report["summary"]) > 0, (
+                            "Summary should not be empty"
+                        )
+                        print("[DEBUG] ✅ ResearchAgent selected correctly")
                     else:
                         assert len(response_data) > 0, "Response should not be empty"
                         print("[DEBUG] ✅ Received valid response")
-                    
+
             except HTTPError as exc:
-                error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+                error_body = (
+                    exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
+                )
                 pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}")
 
             print("\n[DEBUG] ✅ TEST PASSED: All routing tests successful")
