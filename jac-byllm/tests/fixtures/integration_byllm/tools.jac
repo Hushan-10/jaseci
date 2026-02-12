@@ -1,4 +1,4 @@
-"""Safely evaluate a math expression."""
+"""Safely evaluate a math expression"""
 def calculate(expr: str) -> str {
     try {
         return str(eval(expr));
