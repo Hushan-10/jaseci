@@ -5,6 +5,7 @@ This document provides a summary of new features, improvements, and bug fixes in
 ## byllm 0.4.19 (Unreleased)
 
 - Various refactors
+- integration test for byllm
 
 ## byllm 0.4.18 (Latest Release)
 
