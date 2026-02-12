@@ -38,9 +38,9 @@ enum Intent {
 enum ConfidenceLevel { LOW, MEDIUM, HIGH }
 
 enum Personality {
-    INTROVERT, 
+    INTROVERT,
     EXTROVERT,
-    AMBIVERT 
+    AMBIVERT
 }
 
 
@@ -53,13 +53,13 @@ obj StudyAnswer {
 obj ResearchSummary {
     has summary: str,
         key_points: list[str],
-        confidence: str; 
+        confidence: str;
 }
 
 obj Person {
     has full_name: str,
         year_of_death: str,
-        personality: str; 
+        personality: str;
 }
 
 
@@ -74,7 +74,7 @@ node ConceptAgent {
 
         resp = self.explain(visitor.query);
         print(resp);
-        
+
         # Store result on the walker for it to report later
         visitor.agent_result = {"agent": "ConceptAgent", "response": resp};
     }
@@ -92,7 +92,7 @@ node MathAgent {
         print("🧮 MathAgent selected\n");
         result = self.solve(visitor.query);
         print("Math Result:", result);
-        
+
         # Store result on the walker for it to report later
         visitor.agent_result = {"agent": "MathAgent", "response": result};
     }
@@ -111,7 +111,7 @@ node CodeAgent {
         code = self.generate_code(visitor.query);
         print("Verified Code:\n");
         print(code);
-        
+
         visitor.agent_result = {"agent": "CodeAgent", "response": code};
     }
 }
@@ -137,7 +137,7 @@ node ResearchAgent {
         }
 
         print("\nConfidence Level:", result.confidence);
-        
+
         # Store result on the walker for it to report later
         visitor.agent_result = {
             "agent": "ResearchAgent",
@@ -151,17 +151,17 @@ node ResearchAgent {
 walker:pub Supervisor {
 
     has query: str;
-    
+
     can route with Root entry {
 
         if not [root --> (?:ConceptAgent)] { root ++> ConceptAgent(); }
         if not [root --> (?:MathAgent)] { root ++> MathAgent(); }
         if not [root --> (?:CodeAgent)] { root ++> CodeAgent(); }
         if not [root --> (?:ResearchAgent)] { root ++> ResearchAgent(); }
-        
+
         # Initialize result storage (dynamic attribute, not exposed in API)
         self.agent_result = None;
-        
+
         visit [-->] by llms["reason"](
             show_params=True,
             verbose=True,
@@ -171,7 +171,7 @@ walker:pub Supervisor {
             }
         );
     }
-    
+
     can collect_result with Root exit {
         # Report collected results - this works in REST API
         if self.agent_result is not None {
@@ -180,4 +180,3 @@ walker:pub Supervisor {
         }
     }
 }
-
