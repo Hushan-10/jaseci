@@ -162,7 +162,7 @@ walker:pub Supervisor {
         # Initialize result storage (dynamic attribute, not exposed in API)
         self.agent_result = None;
 
-        visit [-->] by llms["reason"](
+        visit [-->] by llms["llm2"](
             show_params=True,
             verbose=True,
             incl_info={
