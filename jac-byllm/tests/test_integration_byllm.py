@@ -17,18 +17,18 @@ import shutil
 import socket
 import sys
 import time
+from collections.abc import Generator
 from subprocess import Popen
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
-from typing import Generator
 
 
 @pytest.fixture(scope="module")
 def byllm_server() -> Generator[tuple[Popen[bytes], int], None, None]:
     """Start the byllm server once for all tests in this module.
-    
+
     Yields:
         Tuple of (server_process, port_number)
     """
@@ -38,23 +38,23 @@ def byllm_server() -> Generator[tuple[Popen[bytes], int], None, None]:
             "OPENAI_API_KEY not set - skipping all integration tests. "
             "Set the environment variable to run these tests."
         )
-    
+
     tests_dir = os.path.dirname(os.path.abspath(__file__))
     fixture_path = os.path.join(tests_dir, "fixtures", "integration_byllm")
     server_port = get_free_port()
     jac_cmd = get_jac_command()
-    
+
     server = Popen(
         [*jac_cmd, "start", "main.jac", "-p", str(server_port)],
         cwd=fixture_path,
     )
-    
+
     try:
         wait_for_port("127.0.0.1", server_port, timeout=60.0)
-        
+
         # Yield server and port to tests
         yield server, server_port
-        
+
     finally:
         server.terminate()
         try:
@@ -171,9 +171,7 @@ class TestByllmWalkerEndpoints:
                     assert len(response_data) > 0, "Response should not be empty"
 
         except HTTPError as exc:
-            error_body = (
-                exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
-            )
+            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}")
 
         # Test Case 2: MathAgent query
@@ -206,9 +204,7 @@ class TestByllmWalkerEndpoints:
                     assert len(response_data) > 0, "Response should not be empty"
 
         except HTTPError as exc:
-            error_body = (
-                exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
-            )
+            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             pytest.fail(f"MathAgent test failed: {exc.code}\n{error_body}")
 
         # Test Case 3: ResearchAgent query
@@ -245,9 +241,7 @@ class TestByllmWalkerEndpoints:
                     assert len(response_data) > 0, "Response should not be empty"
 
         except HTTPError as exc:
-            error_body = (
-                exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
-            )
+            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}")
 
 
