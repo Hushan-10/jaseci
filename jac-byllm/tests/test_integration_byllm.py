@@ -22,6 +22,48 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+from typing import Generator
+
+
+@pytest.fixture(scope="module")
+def byllm_server() -> Generator[tuple[Popen[bytes], int], None, None]:
+    """Start the byllm server once for all tests in this module.
+    
+    Yields:
+        Tuple of (server_process, port_number)
+    """
+    # Skip all tests if OPENAI_API_KEY is not set
+    if not os.environ.get("OPENAI_API_KEY"):
+        pytest.skip(
+            "OPENAI_API_KEY not set - skipping all integration tests. "
+            "Set the environment variable to run these tests."
+        )
+    
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    fixture_path = os.path.join(tests_dir, "fixtures", "integration_byllm")
+    server_port = get_free_port()
+    jac_cmd = get_jac_command()
+    
+    server = Popen(
+        [*jac_cmd, "start", "main.jac", "-p", str(server_port)],
+        cwd=fixture_path,
+    )
+    
+    try:
+        wait_for_port("127.0.0.1", server_port, timeout=60.0)
+        
+        # Yield server and port to tests
+        yield server, server_port
+        
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=15)
+        except Exception:
+            server.kill()
+            server.wait(timeout=5)
+        time.sleep(1)
+        gc.collect()
 
 
 def get_free_port() -> int:
@@ -58,238 +100,155 @@ def wait_for_port(host: str, port: int, timeout: float = 60.0) -> None:
 class TestByllmServerStart:
     """Test that jac start command works for the byllm integration app."""
 
-    def test_server_starts_successfully(self) -> None:
+    def test_server_starts_successfully(
+        self, byllm_server: tuple[Popen[bytes], int]
+    ) -> None:
         """Verify that jac start main.jac starts the server successfully.
 
-        This test:
-        1. Locates the integration_byllm fixture directory
-        2. Starts the server using `jac start main.jac -p <port>`
-        3. Waits for the server to accept connections
-        4. Verifies the server is running
-        5. Cleans up by terminating the server
+        This test verifies:
+        1. Server process is running
+        2. Server port is accepting connections
+        3. Server is stable (hasn't crashed)
 
-        This is the foundation test - if this passes, the server infrastructure works.
-
-        NOTE: Requires OPENAI_API_KEY environment variable to be set.
+        NOTE: Server is started once by the byllm_server fixture for all tests.
         """
-        # Skip test if OPENAI_API_KEY is not set
-        if not os.environ.get("OPENAI_API_KEY"):
-            pytest.skip(
-                "OPENAI_API_KEY not set - skipping server start test. "
-                "Set the environment variable to run this test."
-            )
+        server, server_port = byllm_server
 
-        print("[DEBUG] Starting test_server_starts_successfully")
+        # Verify server process is still alive
+        assert server.poll() is None, "Server should be running"
 
-        tests_dir = os.path.dirname(os.path.abspath(__file__))
-        fixture_path = os.path.join(tests_dir, "fixtures", "integration_byllm")
-        server_port = get_free_port()
-        jac_cmd = get_jac_command()
-        server: Popen[bytes] | None = None
-
+        # Verify port is still accepting connections
         try:
-            server = Popen(
-                [*jac_cmd, "start", "main.jac", "-p", str(server_port)],
-                cwd=fixture_path,
-            )
-            print(f"[DEBUG] Server started on port {server_port} (PID: {server.pid})")
-
-            try:
-                wait_for_port("127.0.0.1", server_port, timeout=60.0)
-                print("[DEBUG] ✅ Server is accepting connections")
-            except TimeoutError:
-                poll_result = server.poll()
-                if poll_result is not None:
-                    pytest.fail(f"Server exited prematurely with code {poll_result}")
-                raise
-
-            assert server.poll() is None, "Server should still be running"
-            print("[DEBUG] ✅ TEST PASSED: Server running successfully")
-
-        finally:
-            if server is not None:
-                server.terminate()
-                try:
-                    server.wait(timeout=15)
-                except Exception:
-                    server.kill()
-                    server.wait(timeout=5)
-                time.sleep(1)
-                gc.collect()
+            wait_for_port("127.0.0.1", server_port, timeout=5.0)
+        except TimeoutError:
+            pytest.fail("Server port is not accepting connections")
 
 
 class TestByllmWalkerEndpoints:
     """Test that walker HTTP endpoints work correctly."""
 
-    def test_supervisor_walker_endpoint(self) -> None:
+    def test_supervisor_walker_endpoint(
+        self, byllm_server: tuple[Popen[bytes], int]
+    ) -> None:
         """Test calling the Supervisor walker via HTTP POST endpoint.
 
         This test:
-        1. Starts the server with walker HTTP endpoints
-        2. Calls POST /walker/Supervisor with a query
-        3. Verifies the routing works (selects correct agent)
-        4. Verifies the agent response is returned correctly
+        1. Calls POST /walker/Supervisor with different queries
+        2. Verifies the routing works (selects correct agent)
+        3. Verifies the agent response is returned correctly
 
-        NOTE: Requires OPENAI_API_KEY environment variable to be set.
+        NOTE: Uses the shared byllm_server fixture that was already started.
         """
-        # Skip test if OPENAI_API_KEY is not set
-        if not os.environ.get("OPENAI_API_KEY"):
-            pytest.skip(
-                "OPENAI_API_KEY not set - skipping walker endpoint test. "
-                "Set the environment variable to run this test."
-            )
+        server, server_port = byllm_server
 
-        print("[DEBUG] Starting test_supervisor_walker_endpoint")
+        # Test Case 1: ConceptAgent query
+        concept_payload = {"query": "Explain machine learning in simple terms"}
 
-        tests_dir = os.path.dirname(os.path.abspath(__file__))
-        fixture_path = os.path.join(tests_dir, "fixtures", "integration_byllm")
-        server_port = get_free_port()
-        jac_cmd = get_jac_command()
-        server: Popen[bytes] | None = None
+        req = Request(
+            f"http://127.0.0.1:{server_port}/walker/Supervisor",
+            data=json.dumps(concept_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
 
         try:
-            server = Popen(
-                [*jac_cmd, "start", "main.jac", "-p", str(server_port)],
-                cwd=fixture_path,
+            with urlopen(req, timeout=90) as resp:
+                response_body = resp.read().decode("utf-8", errors="ignore")
+                assert resp.status == 200, f"Expected 200, got {resp.status}"
+                response_data = json.loads(response_body)
+
+                if "reports" in response_data:
+                    reports = response_data["reports"]
+                    assert len(reports) > 0, "Should have at least one report"
+                    agent_report = reports[0]
+                    assert agent_report["agent"] == "ConceptAgent", (
+                        f"Expected ConceptAgent, got {agent_report.get('agent')}"
+                    )
+                    assert len(agent_report["response"]) > 0, (
+                        "Response should not be empty"
+                    )
+                else:
+                    assert len(response_data) > 0, "Response should not be empty"
+
+        except HTTPError as exc:
+            error_body = (
+                exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             )
-            print(f"[DEBUG] Server started on port {server_port}")
+            pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}")
 
-            wait_for_port("127.0.0.1", server_port, timeout=60.0)
-            print("[DEBUG] ✅ Server is accepting connections")
+        # Test Case 2: MathAgent query
+        math_payload = {"query": "What is (15 + 5) * 2 - (10 / 2)?"}
 
-            # Test POST /walker/Supervisor endpoint with different query types.
-            print("[DEBUG] Testing POST /walker/Supervisor endpoint\n")
+        req = Request(
+            f"http://127.0.0.1:{server_port}/walker/Supervisor",
+            data=json.dumps(math_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
 
-            # Test Case 1: ConceptAgent query
-            print("[DEBUG] Test Case 1: ConceptAgent query")
-            concept_payload = {"query": "Explain machine learning in simple terms"}
+        try:
+            with urlopen(req, timeout=90) as resp:
+                response_body = resp.read().decode("utf-8", errors="ignore")
+                assert resp.status == 200, f"Expected 200, got {resp.status}"
+                response_data = json.loads(response_body)
 
-            req = Request(
-                f"http://127.0.0.1:{server_port}/walker/Supervisor",
-                data=json.dumps(concept_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
+                if "reports" in response_data:
+                    reports = response_data["reports"]
+                    assert len(reports) > 0, "Should have at least one report"
+                    agent_report = reports[0]
+                    assert agent_report["agent"] == "MathAgent", (
+                        f"Expected MathAgent, got {agent_report.get('agent')}"
+                    )
+                    assert len(agent_report["response"]) > 0, (
+                        "Response should not be empty"
+                    )
+                else:
+                    assert len(response_data) > 0, "Response should not be empty"
+
+        except HTTPError as exc:
+            error_body = (
+                exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             )
+            pytest.fail(f"MathAgent test failed: {exc.code}\n{error_body}")
 
-            try:
-                with urlopen(req, timeout=90) as resp:
-                    response_body = resp.read().decode("utf-8", errors="ignore")
-                    assert resp.status == 200, f"Expected 200, got {resp.status}"
-                    response_data = json.loads(response_body)
+        # Test Case 3: ResearchAgent query
+        research_payload = {
+            "query": "Compare supervised fine-tuning and prompt engineering in large language models"
+        }
 
-                    if "reports" in response_data:
-                        reports = response_data["reports"]
-                        assert len(reports) > 0, "Should have at least one report"
-                        agent_report = reports[0]
-                        assert agent_report["agent"] == "ConceptAgent", (
-                            f"Expected ConceptAgent, got {agent_report.get('agent')}"
-                        )
-                        assert len(agent_report["response"]) > 0, (
-                            "Response should not be empty"
-                        )
-                        print("[DEBUG] ✅ ConceptAgent selected correctly")
-                    else:
-                        assert len(response_data) > 0, "Response should not be empty"
-                        print("[DEBUG] ✅ Received valid response")
+        req = Request(
+            f"http://127.0.0.1:{server_port}/walker/Supervisor",
+            data=json.dumps(research_payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
 
-            except HTTPError as exc:
-                error_body = (
-                    exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
-                )
-                pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}")
+        try:
+            with urlopen(req, timeout=90) as resp:
+                response_body = resp.read().decode("utf-8", errors="ignore")
+                assert resp.status == 200, f"Expected 200, got {resp.status}"
+                response_data = json.loads(response_body)
 
-            # Test Case 2: MathAgent query
-            print("\n[DEBUG] Test Case 2: MathAgent query")
-            math_payload = {"query": "What is (15 + 5) * 2 - (10 / 2)?"}
+                if "reports" in response_data:
+                    reports = response_data["reports"]
+                    assert len(reports) > 0, "Should have at least one report"
+                    agent_report = reports[0]
+                    assert agent_report["agent"] == "ResearchAgent", (
+                        f"Expected ResearchAgent, got {agent_report.get('agent')}"
+                    )
+                    # ResearchAgent returns different fields
+                    assert "summary" in agent_report, "Should have summary field"
+                    assert len(agent_report["summary"]) > 0, (
+                        "Summary should not be empty"
+                    )
+                else:
+                    assert len(response_data) > 0, "Response should not be empty"
 
-            req = Request(
-                f"http://127.0.0.1:{server_port}/walker/Supervisor",
-                data=json.dumps(math_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
+        except HTTPError as exc:
+            error_body = (
+                exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             )
-
-            try:
-                with urlopen(req, timeout=90) as resp:
-                    response_body = resp.read().decode("utf-8", errors="ignore")
-                    assert resp.status == 200, f"Expected 200, got {resp.status}"
-                    response_data = json.loads(response_body)
-
-                    if "reports" in response_data:
-                        reports = response_data["reports"]
-                        assert len(reports) > 0, "Should have at least one report"
-                        agent_report = reports[0]
-                        assert agent_report["agent"] == "MathAgent", (
-                            f"Expected MathAgent, got {agent_report.get('agent')}"
-                        )
-                        assert len(agent_report["response"]) > 0, (
-                            "Response should not be empty"
-                        )
-                        print("[DEBUG] ✅ MathAgent selected correctly")
-                    else:
-                        assert len(response_data) > 0, "Response should not be empty"
-                        print("[DEBUG] ✅ Received valid response")
-
-            except HTTPError as exc:
-                error_body = (
-                    exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
-                )
-                pytest.fail(f"MathAgent test failed: {exc.code}\n{error_body}")
-
-            # Test Case 3: ResearchAgent query
-            print("\n[DEBUG] Test Case 3: ResearchAgent query")
-            research_payload = {
-                "query": "Compare supervised fine-tuning and prompt engineering in large language models"
-            }
-
-            req = Request(
-                f"http://127.0.0.1:{server_port}/walker/Supervisor",
-                data=json.dumps(research_payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-
-            try:
-                with urlopen(req, timeout=90) as resp:
-                    response_body = resp.read().decode("utf-8", errors="ignore")
-                    assert resp.status == 200, f"Expected 200, got {resp.status}"
-                    response_data = json.loads(response_body)
-
-                    if "reports" in response_data:
-                        reports = response_data["reports"]
-                        assert len(reports) > 0, "Should have at least one report"
-                        agent_report = reports[0]
-                        assert agent_report["agent"] == "ResearchAgent", (
-                            f"Expected ResearchAgent, got {agent_report.get('agent')}"
-                        )
-                        # ResearchAgent returns different fields
-                        assert "summary" in agent_report, "Should have summary field"
-                        assert len(agent_report["summary"]) > 0, (
-                            "Summary should not be empty"
-                        )
-                        print("[DEBUG] ✅ ResearchAgent selected correctly")
-                    else:
-                        assert len(response_data) > 0, "Response should not be empty"
-                        print("[DEBUG] ✅ Received valid response")
-
-            except HTTPError as exc:
-                error_body = (
-                    exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
-                )
-                pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}")
-
-            print("\n[DEBUG] ✅ TEST PASSED: All routing tests successful")
-
-        finally:
-            if server is not None:
-                server.terminate()
-                try:
-                    server.wait(timeout=15)
-                except Exception:
-                    server.kill()
-                    server.wait(timeout=5)
-                time.sleep(1)
-                gc.collect()
+            pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}")
 
 
 # Run the test if executed directly
