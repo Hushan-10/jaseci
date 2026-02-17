@@ -99,15 +99,15 @@ def wait_for_port(host: str, port: int, timeout: float = 60.0) -> None:
 
 def post_json(port: int, path: str, payload: dict) -> dict:
     """Make a POST request with JSON payload and return parsed response.
-    
+
     Args:
         port: The server port number
         path: The API path (e.g., "/walker/Supervisor")
         payload: The JSON payload to send
-        
+
     Returns:
         The parsed JSON response as a dictionary
-        
+
     Raises:
         HTTPError: If the request fails
         AssertionError: If status code is not 200
@@ -167,7 +167,9 @@ class TestByllmWalkerEndpoints:
         concept_payload = {"query": "Explain machine learning in simple terms"}
 
         try:
-            response_data = post_json(server_port, "/walker/Supervisor", concept_payload)
+            response_data = post_json(
+                server_port, "/walker/Supervisor", concept_payload
+            )
 
             if "reports" in response_data:
                 reports = response_data["reports"]
@@ -176,9 +178,7 @@ class TestByllmWalkerEndpoints:
                 assert agent_report["agent"] == "ConceptAgent", (
                     f"Expected ConceptAgent, got {agent_report.get('agent')}"
                 )
-                assert len(agent_report["response"]) > 0, (
-                    "Response should not be empty"
-                )
+                assert len(agent_report["response"]) > 0, "Response should not be empty"
             else:
                 assert len(response_data) > 0, "Response should not be empty"
 
@@ -209,9 +209,7 @@ class TestByllmWalkerEndpoints:
                 assert agent_report["agent"] == "MathAgent", (
                     f"Expected MathAgent, got {agent_report.get('agent')}"
                 )
-                assert len(agent_report["response"]) > 0, (
-                    "Response should not be empty"
-                )
+                assert len(agent_report["response"]) > 0, "Response should not be empty"
             else:
                 assert len(response_data) > 0, "Response should not be empty"
 
@@ -235,7 +233,9 @@ class TestByllmWalkerEndpoints:
         }
 
         try:
-            response_data = post_json(server_port, "/walker/Supervisor", research_payload)
+            response_data = post_json(
+                server_port, "/walker/Supervisor", research_payload
+            )
 
             if "reports" in response_data:
                 reports = response_data["reports"]
@@ -245,9 +245,7 @@ class TestByllmWalkerEndpoints:
                     f"Expected ResearchAgent, got {agent_report.get('agent')}"
                 )
                 assert "summary" in agent_report, "Should have summary field"
-                assert len(agent_report["summary"]) > 0, (
-                    "Summary should not be empty"
-                )
+                assert len(agent_report["summary"]) > 0, "Summary should not be empty"
             else:
                 assert len(response_data) > 0, "Response should not be empty"
 
