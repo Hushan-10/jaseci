@@ -97,6 +97,32 @@ def wait_for_port(host: str, port: int, timeout: float = 60.0) -> None:
     raise TimeoutError(f"Timed out waiting for {host}:{port}")
 
 
+def post_json(port: int, path: str, payload: dict) -> dict:
+    """Make a POST request with JSON payload and return parsed response.
+    
+    Args:
+        port: The server port number
+        path: The API path (e.g., "/walker/Supervisor")
+        payload: The JSON payload to send
+        
+    Returns:
+        The parsed JSON response as a dictionary
+        
+    Raises:
+        HTTPError: If the request fails
+        AssertionError: If status code is not 200
+    """
+    req = Request(
+        f"http://127.0.0.1:{port}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urlopen(req, timeout=90) as resp:
+        assert resp.status == 200, f"Expected 200, got {resp.status}"
+        return json.loads(resp.read().decode())
+
+
 class TestByllmServerStart:
     """Test that jac start command works for the byllm integration app."""
 
@@ -127,124 +153,104 @@ class TestByllmServerStart:
 class TestByllmWalkerEndpoints:
     """Test that walker HTTP endpoints work correctly."""
 
-    def test_supervisor_walker_endpoint(
+    def test_supervisor_routes_to_concept_agent(
         self, byllm_server: tuple[Popen[bytes], int]
     ) -> None:
-        """Test calling the Supervisor walker via HTTP POST endpoint.
+        """Test that Supervisor correctly routes concept explanation queries to ConceptAgent.
 
-        This test:
-        1. Calls POST /walker/Supervisor with different queries
-        2. Verifies the routing works (selects correct agent)
-        3. Verifies the agent response is returned correctly
-
-        NOTE: Uses the shared byllm_server fixture that was already started.
+        This test verifies:
+        1. POST /walker/Supervisor with a concept query returns 200
+        2. The request is routed to ConceptAgent
+        3. ConceptAgent returns a valid response
         """
         server, server_port = byllm_server
-
-        # Test Case 1: ConceptAgent query
         concept_payload = {"query": "Explain machine learning in simple terms"}
 
-        req = Request(
-            f"http://127.0.0.1:{server_port}/walker/Supervisor",
-            data=json.dumps(concept_payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         try:
-            with urlopen(req, timeout=90) as resp:
-                response_body = resp.read().decode("utf-8", errors="ignore")
-                assert resp.status == 200, f"Expected 200, got {resp.status}"
-                response_data = json.loads(response_body)
+            response_data = post_json(server_port, "/walker/Supervisor", concept_payload)
 
-                if "reports" in response_data:
-                    reports = response_data["reports"]
-                    assert len(reports) > 0, "Should have at least one report"
-                    agent_report = reports[0]
-                    assert agent_report["agent"] == "ConceptAgent", (
-                        f"Expected ConceptAgent, got {agent_report.get('agent')}"
-                    )
-                    assert len(agent_report["response"]) > 0, (
-                        "Response should not be empty"
-                    )
-                else:
-                    assert len(response_data) > 0, "Response should not be empty"
+            if "reports" in response_data:
+                reports = response_data["reports"]
+                assert len(reports) > 0, "Should have at least one report"
+                agent_report = reports[0]
+                assert agent_report["agent"] == "ConceptAgent", (
+                    f"Expected ConceptAgent, got {agent_report.get('agent')}"
+                )
+                assert len(agent_report["response"]) > 0, (
+                    "Response should not be empty"
+                )
+            else:
+                assert len(response_data) > 0, "Response should not be empty"
 
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}")
 
-        # Test Case 2: MathAgent query
+    def test_supervisor_routes_to_math_agent(
+        self, byllm_server: tuple[Popen[bytes], int]
+    ) -> None:
+        """Test that Supervisor correctly routes math queries to MathAgent.
+
+        This test verifies:
+        1. POST /walker/Supervisor with a math query returns 200
+        2. The request is routed to MathAgent
+        3. MathAgent returns a valid response
+        """
+        server, server_port = byllm_server
         math_payload = {"query": "What is (15 + 5) * 2 - (10 / 2)?"}
 
-        req = Request(
-            f"http://127.0.0.1:{server_port}/walker/Supervisor",
-            data=json.dumps(math_payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         try:
-            with urlopen(req, timeout=90) as resp:
-                response_body = resp.read().decode("utf-8", errors="ignore")
-                assert resp.status == 200, f"Expected 200, got {resp.status}"
-                response_data = json.loads(response_body)
+            response_data = post_json(server_port, "/walker/Supervisor", math_payload)
 
-                if "reports" in response_data:
-                    reports = response_data["reports"]
-                    assert len(reports) > 0, "Should have at least one report"
-                    agent_report = reports[0]
-                    assert agent_report["agent"] == "MathAgent", (
-                        f"Expected MathAgent, got {agent_report.get('agent')}"
-                    )
-                    assert len(agent_report["response"]) > 0, (
-                        "Response should not be empty"
-                    )
-                else:
-                    assert len(response_data) > 0, "Response should not be empty"
+            if "reports" in response_data:
+                reports = response_data["reports"]
+                assert len(reports) > 0, "Should have at least one report"
+                agent_report = reports[0]
+                assert agent_report["agent"] == "MathAgent", (
+                    f"Expected MathAgent, got {agent_report.get('agent')}"
+                )
+                assert len(agent_report["response"]) > 0, (
+                    "Response should not be empty"
+                )
+            else:
+                assert len(response_data) > 0, "Response should not be empty"
 
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             pytest.fail(f"MathAgent test failed: {exc.code}\n{error_body}")
 
-        # Test Case 3: ResearchAgent query
+    def test_supervisor_routes_to_research_agent(
+        self, byllm_server: tuple[Popen[bytes], int]
+    ) -> None:
+        """Test that Supervisor correctly routes research queries to ResearchAgent.
+
+        This test verifies:
+        1. POST /walker/Supervisor with a research query returns 200
+        2. The request is routed to ResearchAgent
+        3. ResearchAgent returns a valid structured response
+        """
+        server, server_port = byllm_server
         research_payload = {
             "query": "Compare supervised fine-tuning and prompt engineering in large language models"
         }
 
-        req = Request(
-            f"http://127.0.0.1:{server_port}/walker/Supervisor",
-            data=json.dumps(research_payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-
         try:
-            with urlopen(req, timeout=90) as resp:
-                response_body = resp.read().decode("utf-8", errors="ignore")
-                assert resp.status == 200, f"Expected 200, got {resp.status}"
-                response_data = json.loads(response_body)
+            response_data = post_json(server_port, "/walker/Supervisor", research_payload)
 
-                if "reports" in response_data:
-                    reports = response_data["reports"]
-                    assert len(reports) > 0, "Should have at least one report"
-                    agent_report = reports[0]
-                    assert agent_report["agent"] == "ResearchAgent", (
-                        f"Expected ResearchAgent, got {agent_report.get('agent')}"
-                    )
-                    # ResearchAgent returns different fields
-                    assert "summary" in agent_report, "Should have summary field"
-                    assert len(agent_report["summary"]) > 0, (
-                        "Summary should not be empty"
-                    )
-                else:
-                    assert len(response_data) > 0, "Response should not be empty"
+            if "reports" in response_data:
+                reports = response_data["reports"]
+                assert len(reports) > 0, "Should have at least one report"
+                agent_report = reports[0]
+                assert agent_report["agent"] == "ResearchAgent", (
+                    f"Expected ResearchAgent, got {agent_report.get('agent')}"
+                )
+                assert "summary" in agent_report, "Should have summary field"
+                assert len(agent_report["summary"]) > 0, (
+                    "Summary should not be empty"
+                )
+            else:
+                assert len(response_data) > 0, "Response should not be empty"
 
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else ""
             pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}")
-
-
-# Run the test if executed directly
-if __name__ == "__main__":
-    pytest.main([__file__, "-v", "-s"])
