@@ -58,9 +58,7 @@ obj Person {
 
 node ConceptAgent {
 
-    def explain(topic: str) -> str by llms["llm1"](
-        stream=True
-    );
+    def explain(topic: str) -> str by llms["llm1"];
 
     can handle with Supervisor entry {
         resp = self.explain(visitor.query);
