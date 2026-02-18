@@ -957,7 +957,16 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
                 for _a in args {
                     _args_strs.append(_unparser.generate(_a));
                 }
+                # Include keyword argument values (e.g., key=lambda in sort)
+                for _p in props {
+                    if isinstance(_p, es.Property) and _p.value {
+                        _args_strs.append(_unparser.generate(_p.value));
+                    }
+                }
                 _result = _emit_fn(_ctx, _target_str, _args_strs);
+                if _result is not None and "_jac." in str(_result) {
+                    self.needs_jac_runtime = True;
+                }
                 nd.gen.es_ast = self.sync_loc(es.Identifier(name=_result), jac_node=nd);
                 return;
             }
@@ -991,6 +1000,9 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
                 _args_strs.append(_unparser.generate(_a));
             }
             _result = _emit_fn(_ctx, _args_strs);
+            if _result is not None and "_jac." in str(_result) {
+                self.needs_jac_runtime = True;
+            }
             nd.gen.es_ast = self.sync_loc(es.Identifier(name=_result), jac_node=nd);
             return;
         }
@@ -1381,6 +1393,9 @@ impl EsastGenPass._try_primitive_op(
     _result = _emit_fn(_ctx, _target_str, _args_strs);
     if _result is None {
         return None;
+    }
+    if "_jac." in str(_result) {
+        self.needs_jac_runtime = True;
     }
     return self.sync_loc(es.Identifier(name=_result), jac_node=jac_node);
 }
@@ -2742,6 +2757,23 @@ impl EsastGenPass.exit_module(nd: uni.Module) -> None {
         scope.hoisted.clear();
         body.extend(hoisted);
     }
+    # Inject _jac runtime object if any primitive emitter produced _jac.* calls
+    if self.needs_jac_runtime {
+        _jac_rt_mod = __import__(
+            "jaclang.compiler.passes.ecmascript.jac_runtime_js",
+            fromlist=["JAC_RUNTIME_JS_OBJECT"]
+        );
+        jac_rt_decl = es.VariableDeclaration(
+            declarations=[
+                es.VariableDeclarator(
+                    id=es.Identifier(name='_jac'),
+                    init=es.Identifier(name=_jac_rt_mod.JAC_RUNTIME_JS_OBJECT)
+                )
+            ],
+            kind='const'
+        );
+        body.append(jac_rt_decl);
+    }
     merged_body = self._merge_module_bodies(nd);
     client_items: list[es.Statement | list[es.Statement] | None] = [];
     fallback_items: list[es.Statement | list[es.Statement] | None] = [];
@@ -3238,6 +3270,8 @@ impl EsastGenPass.before_pass -> None {
     self.has_injected_jac_call_function: bool = False;
     # Track if useEffect import has been auto-injected to avoid duplicates
     self.has_injected_useeffect: bool = False;
+    # Track whether generated code uses _jac runtime (primitive emitter produced _jac.* calls)
+    self.needs_jac_runtime: bool = False;
     # Primitive emitter instances for codegen dispatch (lazily initialized to avoid circular imports)
     self._primitive_emitters: dict[str, object] | None = None;
     self._builtin_emitter: object | None = None;

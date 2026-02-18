@@ -142,3 +142,14 @@ test "builtin functions match across backends" {
     js_result = run_js_function(js_code, "builtins_cl");
     compare_results(py_result, js_result, "builtins");
 }
+
+test "jac runtime primitives match across backends" {
+    # Operations that emit _jac.* calls (list.sort with key, list.count,
+    # list.remove, str.capitalize) require the _jac runtime object to be
+    # defined in the JS output.  This test will fail with
+    # "ReferenceError: _jac is not defined" until the runtime is provided.
+    py_result = run_py_fixture("prim_jac_runtime", "jac_runtime_py");
+    js_code = compile_fixture_to_js("prim_jac_runtime.jac");
+    js_result = run_js_function(js_code, "jac_runtime_cl");
+    compare_results(py_result, js_result, "jac_runtime");
+}
