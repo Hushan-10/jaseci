@@ -4,42 +4,60 @@ Direct implementations - no delegation to cli.jac.
 """
 
 import from pathlib { Path }
+import from fnmatch { fnmatch }
 import from jaclang.cli.console { console }
+import from jaclang.cli.check_report {
+    print_file_progress,
+    print_failures,
+    print_failed_summary,
+    print_final_summary
+}
 
 """Run type checker for specified .jac files."""
 impl check(
     paths: list,
     print_errs: bool = True,
-    warnonly: bool = False,
-    ignore: str = "",
+    ignore: list = [],
     parse_only: bool = False,
     nowarn: bool = False
 ) -> int {
     import from jaclang.jac0core.program { JacProgram }
+    import from time { time }
     if isinstance(paths, str) {
         paths = [paths];
     }
-    ignore_list = [
-        pattern.strip()
-        for pattern in ignore.split(",")
-        if pattern.strip()
-    ]
-    if ignore
-    else [];
-    def ignore_check(file_path: str, ignore_patterns: list) -> bool {
-        path_parts = Path(file_path).parts;
-        for pattern in ignore_patterns {
-            if str(pattern).strip() in path_parts {
-                return True;
-            }
+    start_time = time();
+    ignore_list = _normalize_ignore_patterns(ignore);
+    # Helper to process and store single file result
+    def process_file_result(file_path: str, idx: int, total: int) -> None {
+        nonlocal total_files , total_errors , total_warnings , failed_files ;
+        total_files += 1;
+        (success, errs, warns, errors_list, warnings_list) = check_single_file(
+            prog, file_path
+        );
+        total_errors += errs;
+        total_warnings += warns;
+
+        # Print progress line
+        print_file_progress(file_path, success, idx, total);
+
+        # Store only failed results
+        if not success {
+            failed_files += 1;
+            failed_results.append(
+                {'path': file_path, 'errors': errors_list, 'warnings': warnings_list}
+            );
         }
-        return False;
     }
-    def check_single_file(prog: JacProgram, file_path: str) -> tuple[bool, int, int] {
+    # Store failed file results for later detailed output
+    failed_results: list[dict] = [];
+    def check_single_file(
+        prog: JacProgram, file_path: str
+    ) -> tuple[bool, int, int, list, list] {
         path_obj = Path(file_path);
         if not path_obj.exists() {
             console.error(f"File '{file_path}' does not exist.");
-            return (False, 1, 0);
+            return (False, 1, 0, [], []);
         }
         try {
             (err_start, warn_start) = (len(prog.errors_had), len(prog.warnings_had));
@@ -62,26 +80,19 @@ impl check(
             }
             filtered_errors = filter_issues(new_errors);
             filtered_warnings = filter_issues(new_warnings);
-
-            if print_errs {
-                for e in filtered_errors {
-                    console.error(f"{e}");
-                }
-                if not nowarn {
-                    for w in filtered_warnings {
-                        console.warning(f"{w}");
-                    }
-                }
-            }
+            err_count = len(filtered_errors);
+            warn_count = len(filtered_warnings);
 
             return (
-                (len(filtered_errors) == 0),
-                len(filtered_errors),
-                len(filtered_warnings)
+                err_count == 0,
+                err_count,
+                warn_count,
+                filtered_errors,
+                filtered_warnings
             );
         } except Exception as e {
             console.error(f"Error checking '{file_path}': {e}");
-            return (False, 1, 0);
+            return (False, 1, 0, [], []);
         }
     }
     total_files = failed_files=total_errors=total_warnings=0;
@@ -89,29 +100,19 @@ impl check(
     for path in paths {
         path_obj = Path(path);
         if path.endswith('.jac') {
-            if not ignore_check(path, ignore_list) {
-                total_files += 1;
-                (success, errs, warns) = check_single_file(prog, path);
-                total_errors += errs;
-                total_warnings += warns;
-                if not success {
-                    failed_files += 1;
-                }
+            if not _should_ignore(path, ignore_list) {
+                process_file_result(path, 1, 1);
             }
         } elif path_obj.is_dir() {
-            for jac_file in path_obj.glob('**/*.jac') {
-                if not jac_file.is_file() {
-                    continue;
-                }
-                if not ignore_check(str(jac_file), ignore_list) {
-                    total_files += 1;
-                    (success, errs, warns) = check_single_file(prog, str(jac_file));
-                    total_errors += errs;
-                    total_warnings += warns;
-                    if not success {
-                        failed_files += 1;
-                    }
-                }
+            all_files = [
+                str(jac_file)
+                for jac_file in path_obj.glob('**/*.jac')
+                if jac_file.is_file()
+                and not _should_ignore(str(jac_file), ignore_list)
+            ];
+            total_to_check = len(all_files);
+            for (idx, jac_file_path) in enumerate(all_files, 1) {
+                process_file_result(jac_file_path, idx, total_to_check);
             }
         } else {
             console.error(f"'{path}' is not a .jac file or directory.");
@@ -119,43 +120,26 @@ impl check(
             total_errors += 1;
         }
     }
-    check_type = "Parsed" if parse_only else "Checked";
-    summary_msg = f"{check_type} {total_files} '.jac' files: {(
-        total_files - failed_files
-    )} passed, {failed_files} with errors ({total_errors} errors, {total_warnings} warnings).";
-    if total_errors {
-        console.error(summary_msg);
-    } else {
-        console.success(summary_msg);
+    # Print FAILURES section and summary
+    if failed_files > 0 {
+        if print_errs {
+            print_failures(failed_results, nowarn);
+        }
+        print_failed_summary(failed_results);
     }
-    if (total_errors > 0 and not warnonly) {
-        return 1;
-    }
-    return 0;
+    # Print final summary line
+    elapsed = time() - start_time;
+    print_final_summary(total_files - failed_files, failed_files, elapsed);
+    return 1 if total_errors > 0 else 0;
 }
 
 """Lint .jac files and report violations."""
-impl lint(paths: list, fix: bool = False, ignore: str = "") -> int {
+impl lint(paths: list, fix: bool = False, ignore: list = []) -> int {
     import from jaclang.jac0core.program { JacProgram }
     if isinstance(paths, str) {
         paths = [paths];
     }
-    ignore_list = [
-        pattern.strip()
-        for pattern in ignore.split(",")
-        if pattern.strip()
-    ]
-    if ignore
-    else [];
-    def ignore_check(file_path: str, ignore_patterns: list) -> bool {
-        path_parts = Path(file_path).parts;
-        for pattern in ignore_patterns {
-            if str(pattern).strip() in path_parts {
-                return True;
-            }
-        }
-        return False;
-    }
+    ignore_list = _normalize_ignore_patterns(ignore);
     def lint_report_file(file_path: str) -> tuple[bool, int] {
         # Lint-only: report errors without formatting or writing files
         path_obj = Path(file_path);
@@ -210,7 +194,7 @@ impl lint(paths: list, fix: bool = False, ignore: str = "") -> int {
             if error_count > unfixable_count {
                 changed = formatted_code != original_code;
                 if changed {
-                    with open(str(path_obj), 'w') as f {
+                    with open(str(path_obj), 'w', encoding='utf-8') as f {
                         f.write(formatted_code);
                     }
                 }
@@ -219,7 +203,7 @@ impl lint(paths: list, fix: bool = False, ignore: str = "") -> int {
                     impl_formatted = impl_mod.gen.jac;
                     impl_original = impl_mod.source.code;
                     if (impl_formatted != impl_original) {
-                        with open(impl_path, 'w') as f {
+                        with open(impl_path, 'w', encoding='utf-8') as f {
                             f.write(impl_formatted);
                         }
                     }
@@ -238,7 +222,7 @@ impl lint(paths: list, fix: bool = False, ignore: str = "") -> int {
     for path in paths {
         path_obj = Path(path);
         if path.endswith('.jac') {
-            if not ignore_check(path, ignore_list) {
+            if not _should_ignore(path, ignore_list) {
                 total_files += 1;
                 if fix {
                     (success, errors, unfixable) = lint_fix_file(path);
@@ -256,7 +240,7 @@ impl lint(paths: list, fix: bool = False, ignore: str = "") -> int {
                 if not jac_file.is_file() {
                     continue;
                 }
-                if not ignore_check(str(jac_file), ignore_list) {
+                if not _should_ignore(str(jac_file), ignore_list) {
                     total_files += 1;
                     if fix {
                         (success, errors, unfixable) = lint_fix_file(str(jac_file));
@@ -313,8 +297,12 @@ impl format(
         if to_screen {
             console.print(code);
         } elif not check {
-            with open(target_path, 'w') as f {
-                f.write(code);
+            try {
+                with open(target_path, 'w', encoding='utf-8') as f {
+                    f.write(code);
+                }
+            } except Exception as e {
+                console.error(f"Error writing formatted code to '{target_path}': {e}");
             }
         }
     }
@@ -325,10 +313,9 @@ impl format(
             console.error(f"File '{file_path}' does not exist.");
             return (False, False, 0);
         }
-        console.print(f"  Formatting {file_path}...");
         try {
             prog = JacProgram.jac_file_formatter(str(path_obj), auto_lint=lintfix);
-            if prog.mod.main.has_syntax_errors {
+            if prog.errors_had {
                 for error in prog.errors_had {
                     console.error(f"{error}");
                 }
@@ -521,7 +508,7 @@ impl grammar(lark: bool = False, output: str = "") -> int {
     }
     text = pass_.emit_lark() if lark else pass_.emit_ebnf();
     if output {
-        with open(output, "w") as f {
+        with open(output, "w", encoding="utf-8") as f {
             f.write(text);
             f.write("\n");
         }
@@ -533,4 +520,36 @@ impl grammar(lark: bool = False, output: str = "") -> int {
         console.print(text);
     }
     return 0;
+}
+
+"""Normalize ignore patterns by stripping whitespace and trailing slashes."""
+def _normalize_ignore_patterns(ignore: list) -> list {
+    normalized = [];
+    for p in (ignore or []) {
+        stripped = p.strip();
+        if stripped {
+            normalized.append(stripped.rstrip('/'));
+        }
+    }
+    return normalized;
+}
+
+"""Check if a file path should be ignored based on patterns.
+Supports both exact matches and wildcard patterns (e.g., 'jac-*').
+"""
+def _should_ignore(file_path: str, ignore_patterns: list) -> bool {
+    if not ignore_patterns {
+        return False;
+    }
+    path_parts = Path(file_path).parts;
+    # Patterns are already normalized in ignore_list
+    for pattern in ignore_patterns {
+        # fnmatch handles both exact and wildcard matches
+        for part in path_parts {
+            if fnmatch(part, pattern) {
+                return True;
+            }
+        }
+    }
+    return False;
 }
