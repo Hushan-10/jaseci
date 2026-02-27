@@ -381,9 +381,17 @@ obj Cat(Animal) {
     }
 }
 
+# Trackable mixin
+obj Trackable {
+    has tracked: bool = False;
+}
+
 # Multiple inheritance
+# Note: When a parent has fields with defaults, all child fields
+# must also have defaults (Python dataclass constraint)
 obj Pet(Animal, Trackable) {
-    has owner: str;
+    has owner: str = "";
+    has name: str = "";
 }
 ```
 

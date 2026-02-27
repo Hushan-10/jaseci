@@ -98,7 +98,7 @@ glob llm = Model(model_name="gpt-4o");
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `model_name` | str | Yes | Model identifier (e.g., "gpt-4o", "claude-3-5-sonnet-20240620") |
+| `model_name` | str | Yes | Model identifier (e.g., "gpt-4o", "claude-sonnet-4-6") |
 | `api_key` | str | No | API key for the model provider (defaults to environment variable) |
 | `config` | dict | No | Configuration dictionary (see below) |
 
@@ -180,7 +180,7 @@ You can also override per-file with `glob llm = Model(...)` (see [Custom Model (
 | Provider | Model Name Format | Example |
 |----------|-------------------|---------|
 | OpenAI | `gpt-*` | `gpt-4o`, `gpt-4o-mini` |
-| Anthropic | `claude-*` | `claude-3-5-sonnet-20240620` |
+| Anthropic | `claude-*` | `claude-sonnet-4-6` |
 | Google | `gemini/*` | `gemini/gemini-2.0-flash` |
 | Ollama | `ollama/*` | `ollama/llama3:70b` |
 | HuggingFace | `huggingface/*` | `huggingface/meta-llama/Llama-3.3-70B-Instruct` |
