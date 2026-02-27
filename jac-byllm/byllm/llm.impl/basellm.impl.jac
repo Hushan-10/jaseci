@@ -13,6 +13,10 @@ Handles both streaming and non-streaming modes. For tool-enabled requests,
 implements a ReAct loop that continues until finish_tool is called.
 """
 impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
+    # If logging is enabled with streaming, yield StreamEvent objects
+    if mt_run.stream and mt_run.call_params.get("logging", False) {
+        return self._invoke_streaming(mt_run);
+    }
     # If streaming without tools, stream immediately
     if mt_run.stream and len(mt_run.tools) == 0 {
         return self.dispatch_streaming(mt_run);
@@ -255,16 +259,148 @@ impl BaseLLM._stream_final_answer(mt_run: MTRuntime) -> Generator[str, None, Non
         "Be comprehensive and synthesize all the information gathered.",
     );
     mt_run.add_message(final_instruction);
-    # Keep only finish_tool so Anthropic sees a valid tools= param
-    # (conversation history may already contain tool call results)
+    # Clear ALL tools so the LLM is forced to produce text, not call finish_tool again
     original_tools = mt_run.tools;
-    finish_tool_obj = mt_run.get_tool("finish_tool");
-    mt_run.tools = [finish_tool_obj] if finish_tool_obj else [];
+    mt_run.tools = [];
     try {
         # Make the actual streaming call - this is REAL streaming from the LLM!
         yield from self.dispatch_streaming(mt_run);
     } finally {
         # Restore tools (though we're done at this point)
         mt_run.tools = original_tools;
+    }
+}
+
+"""Invoke the LLM with logging enabled, yielding StreamEvent objects.
+
+When logging=True is set in call_params, this method replaces the default
+invoke path. It yields StreamEvent for every intermediate step (thoughts,
+tool calls, tool results) and wraps final answer tokens in StreamEvent too.
+Works for both tool and non-tool streaming paths.
+"""
+impl BaseLLM._invoke_streaming(mt_run: MTRuntime) -> Generator[StreamEvent, None, None] {
+    # No tools: wrap plain streaming tokens in StreamEvent
+    if len(mt_run.tools) == 0 {
+        for token in self.dispatch_streaming(mt_run) {
+            yield StreamEvent(event_type="chunk", data={"content": token});
+        }
+    } else {
+        # ReAct loop with tools
+        max_iters = (
+            mt_run.call_params.get("max_react_iterations")
+            or self.call_params.get("max_react_iterations")
+            or _call_params_config.get("max_react_iterations")
+            or 0
+        );
+        iter_count = 0;
+        done = False;
+
+        while not done {
+            iter_count += 1;
+
+            if int(max_iters) > 0 and iter_count > int(max_iters) {
+                yield StreamEvent(
+                    event_type="steps_done",
+                    data={"iterations": iter_count - 1, "reason": "max_iterations"}
+                );
+                # Inline _stream_final_answer to avoid triple-nested generator issue
+                final_instruction = Message(
+                    role=MessageRole.USER,
+                    content="Based on the tool calls and their results above, provide your final answer. "
+                    "Be comprehensive and synthesize all the information gathered.",
+                );
+                mt_run.add_message(final_instruction);
+                original_tools = mt_run.tools;
+                # Clear ALL tools to force the LLM to produce text instead of calling finish_tool again
+                mt_run.tools = [];
+                for token in self.dispatch_streaming(mt_run) {
+                    if token {
+                        yield StreamEvent(event_type="chunk", data={"content": token});
+                    }
+                }
+                mt_run.tools = original_tools;
+                done = True;
+            }
+
+            if not done {
+                resp = self.dispatch_no_streaming(mt_run);
+
+                # Yield thought if the LLM produced reasoning text
+                if resp.output and str(resp.output).strip() {
+                    yield StreamEvent(
+                        event_type="thought",
+                        data={"content": str(resp.output).strip(), "iteration": iter_count}
+                    );
+                }
+
+                if resp.tool_calls {
+                    for tool_call in resp.tool_calls {
+                        if tool_call.is_finish_call() {
+                            mt_run.add_message(tool_call());
+                            yield StreamEvent(
+                                event_type="steps_done",
+                                data={"iterations": iter_count}
+                            );
+                            # Inline _stream_final_answer to avoid triple-nested generator issue
+                            final_instruction = Message(
+                                role=MessageRole.USER,
+                                content="Based on the tool calls and their results above, provide your final answer. "
+                                "Be comprehensive and synthesize all the information gathered.",
+                            );
+                            mt_run.add_message(final_instruction);
+                            original_tools = mt_run.tools;
+                            # Clear ALL tools to force the LLM to produce text instead of calling finish_tool again
+                            mt_run.tools = [];
+                            for token in self.dispatch_streaming(mt_run) {
+                                if token {
+                                    yield StreamEvent(event_type="chunk", data={"content": token});
+                                }
+                            }
+                            mt_run.tools = original_tools;
+                            done = True;
+                        }
+
+                        if not done {
+                            # Yield tool_call event before execution
+                            yield StreamEvent(
+                                event_type="tool_call",
+                                data={
+                                    "tool": tool_call.tool.get_name(),
+                                    "args": tool_call.args,
+                                    "call_id": tool_call.call_id,
+                                    "iteration": iter_count
+                                }
+                            );
+
+                            # Execute the tool
+                            result_msg = tool_call();
+
+                            # Yield tool_result event after execution
+                            yield StreamEvent(
+                                event_type="tool_result",
+                                data={
+                                    "tool": tool_call.tool.get_name(),
+                                    "result": result_msg.content[:500],
+                                    "call_id": tool_call.call_id,
+                                    "iteration": iter_count
+                                }
+                            );
+
+                            mt_run.add_message(result_msg);
+                        }
+                    }
+                } else {
+                    done = True;
+                    # Fallback: no tool calls, no finish_tool
+                    yield StreamEvent(
+                        event_type="steps_done",
+                        data={"iterations": iter_count}
+                    );
+                    if resp.output {
+                        yield StreamEvent(event_type="chunk", data={"content": str(resp.output)});
+                    }
+                }
+            }
+        }
     }
 }
