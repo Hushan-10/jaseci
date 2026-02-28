@@ -617,6 +617,7 @@ with entry {
 !!! note "The `++>` operator returns a list"
     The `++>` operator returns a **list** containing the created node(s). Access the node with `[0]` index:
 
+    <!-- jac-skip: fragment shown in context of a walker ability -->
     ```jac
     new_node = here ++> Todo(id="123", title="Buy groceries");
     created_todo = new_node[0];  # Access the actual node

@@ -1086,13 +1086,13 @@ For self-hosted models or custom APIs not supported by LiteLLM, create a custom 
             super().__init__(model_name=self.model_name, **self.config);
         }
 
-        def model_call_no_stream(params: dict) {
+        def model_call_no_stream(params: dict) -> object {
             client = OpenAI(api_key=self.api_key);
             response = client.chat.completions.create(**params);
             return response;
         }
 
-        def model_call_with_stream(params: dict) {
+        def model_call_with_stream(params: dict) -> object {
             client = OpenAI(api_key=self.api_key);
             response = client.chat.completions.create(stream=True, **params);
             return response;
