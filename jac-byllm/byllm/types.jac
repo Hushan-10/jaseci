@@ -106,7 +106,8 @@ obj MockToolCall {
 """Result of the completion from the LLM."""
 obj CompletionResult {
     has output: object,
-        tool_calls: list[ToolCall];
+        tool_calls: list[ToolCall],
+        usage: dict = {};
 }
 
 """Unified event type for streaming output from by llm() calls.
