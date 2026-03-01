@@ -272,7 +272,9 @@ impl BaseLLM.dispatch_no_streaming(mt_run: MTRuntime) -> CompletionResult {
         if not tool_calls_list
         else output_content;
     usage_data = response.get("usage", {});
-    return CompletionResult(output=output_value, tool_calls=tool_calls, usage=usage_data);
+    return CompletionResult(
+        output=output_value, tool_calls=tool_calls, usage=usage_data
+    );
 }
 
 """Dispatch the LLM call with streaming.
@@ -455,10 +457,7 @@ impl BaseLLM._invoke_streaming(
             if resp.output and str(resp.output).strip() {
                 yield StreamEvent(
                     event_type="thought",
-                    data={
-                        "content": str(resp.output).strip(),
-                        "iteration": iter_count
-                    }
+                    data={"content": str(resp.output).strip(), "iteration": iter_count}
                 );
             }
 
@@ -467,8 +466,7 @@ impl BaseLLM._invoke_streaming(
                     if tool_call.is_finish_call() {
                         mt_run.add_message(tool_call());
                         yield StreamEvent(
-                            event_type="steps_done",
-                            data={"iterations": iter_count}
+                            event_type="steps_done", data={"iterations": iter_count}
                         );
                         for token in self._stream_final_answer(mt_run) {
                             if token {
@@ -489,10 +487,8 @@ impl BaseLLM._invoke_streaming(
                                 "iteration": iter_count
                             }
                         );
-
                         # Execute the tool
                         result_msg = tool_call();
-
                         # Yield tool_result event after execution
                         # Truncate result for the event stream (full result stays in mt_run messages).
                         # Configurable via call_params["max_tool_result_length"], default 500.
@@ -512,7 +508,6 @@ impl BaseLLM._invoke_streaming(
                                 "iteration": iter_count
                             }
                         );
-
                         mt_run.add_message(result_msg);
                     }
                 }
