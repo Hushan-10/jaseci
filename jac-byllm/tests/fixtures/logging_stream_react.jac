@@ -1,5 +1,5 @@
 """Test logging=True streaming with ReAct tool calls."""
-import from byllm.lib { Model, MockToolCall }
+import from byllm.lib {  MockLLM, MockToolCall }
 import from byllm.types { StreamEvent }
 
 # Mock tool functions
@@ -12,7 +12,7 @@ def finish_tool(final_output: str) -> str {
 }
 
 # Create a mock LLM that simulates ReAct: thought -> tool call -> finish
-glob llm = Model(
+glob llm =  MockLLM(
          model_name="mockllm",
          config={
              "outputs": [

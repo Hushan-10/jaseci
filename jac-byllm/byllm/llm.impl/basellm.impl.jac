@@ -63,37 +63,18 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
         try {
             resp = self.dispatch_no_streaming(mt_run);
         } except OutputConversionError {
-            # gpt-4o returned plain text that can't be parsed as the expected type.
-            # If we have a finish_tool and a structured return type, attempt recovery
-            # by re-prompting with only finish_tool available.
-            finish_tool_obj = mt_run.get_tool("finish_tool");
-            if finish_tool_obj
-            and mt_run.resp_type is not None
-            and mt_run.resp_type is not str {
-                recovery_msg = Message(
-                    role=MessageRole.USER,
-                    content="You must use finish_tool to return your response. Call finish_tool now.",
-                );
-                mt_run.add_message(recovery_msg);
-                original_tools = mt_run.tools;
-                mt_run.tools = [finish_tool_obj];
-                try {
-                    recovery_resp = self.dispatch_no_streaming(mt_run);
-                    if recovery_resp.tool_calls {
-                        for tool_call in recovery_resp.tool_calls {
-                            if tool_call.is_finish_call() {
-                                mt_run.add_message(tool_call());
-                                return tool_call.get_output();
-                            }
-                        }
+            # gpt-4o returned plain text that can't be parsed — attempt recovery.
+            recovery_resp = self._attempt_recovery(mt_run);
+            if recovery_resp is None { raise; }
+            if recovery_resp.tool_calls {
+                for tool_call in recovery_resp.tool_calls {
+                    if tool_call.is_finish_call() {
+                        mt_run.add_message(tool_call());
+                        return tool_call.get_output();
                     }
-                    return recovery_resp.output;
-                } finally {
-                    mt_run.tools = original_tools;
                 }
             }
-            # No recovery possible — re-raise the original exception
-            raise ;
+            return recovery_resp.output;
         }
         if resp.tool_calls {
             for tool_call in resp.tool_calls {
@@ -115,33 +96,17 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
             # the model skipped the expected workflow — attempt recovery.
             # (This also handles subclasses like MockLLM that bypass parse_response
             # and thus don't trigger OutputConversionError.)
-            finish_tool_obj = mt_run.get_tool("finish_tool");
-            if not finish_tool_obj
-            or mt_run.resp_type is None
-            or mt_run.resp_type is str {
-                break;
-            }
-            recovery_msg = Message(
-                role=MessageRole.USER,
-                content="You must use finish_tool to return your response. Call finish_tool now.",
-            );
-            mt_run.add_message(recovery_msg);
-            original_tools = mt_run.tools;
-            mt_run.tools = [finish_tool_obj];
-            try {
-                recovery_resp = self.dispatch_no_streaming(mt_run);
-                if recovery_resp.tool_calls {
-                    for tool_call in recovery_resp.tool_calls {
-                        if tool_call.is_finish_call() {
-                            mt_run.add_message(tool_call());
-                            return tool_call.get_output();
-                        }
+            recovery_resp = self._attempt_recovery(mt_run);
+            if recovery_resp is None { break; }
+            if recovery_resp.tool_calls {
+                for tool_call in recovery_resp.tool_calls {
+                    if tool_call.is_finish_call() {
+                        mt_run.add_message(tool_call());
+                        return tool_call.get_output();
                     }
                 }
-                return recovery_resp.output;
-            } finally {
-                mt_run.tools = original_tools;
             }
+            return recovery_resp.output;
         }
     }
     return resp.output;
@@ -343,14 +308,89 @@ impl BaseLLM._stream_final_answer(mt_run: MTRuntime) -> Generator[str, None, Non
     mt_run.tools = [finish_tool_obj] if finish_tool_obj else [];
     # Force text generation — tool_choice="none" tells the LLM
     # "tools are defined but do NOT call any, just produce text"
+    # Save caller's original tool_choice (if any) so we can restore it after.
+    original_tool_choice = mt_run.call_params.pop("tool_choice", None);
     mt_run.call_params["tool_choice"] = "none";
     try {
         # Make the actual streaming call - this is REAL streaming from the LLM!
         yield from self.dispatch_streaming(mt_run);
     } finally {
-        # Restore tools and remove tool_choice override
+        # Restore tools and original tool_choice
         mt_run.tools = original_tools;
         mt_run.call_params.pop("tool_choice", None);
+        if original_tool_choice is not None {
+            mt_run.call_params["tool_choice"] = original_tool_choice;
+        }
+    }
+}
+
+"""Attempt finish_tool recovery when the LLM skips the expected workflow.
+
+Called when the LLM either raises OutputConversionError (non-JSON output
+from parse_response) or returns no tool calls when finish_tool was expected.
+Re-prompts the LLM with only finish_tool available.
+
+Returns CompletionResult from the recovery dispatch if preconditions are met,
+or None if recovery is not applicable (no finish_tool, or resp_type is str/None).
+Callers should check the returned CompletionResult's tool_calls for finish_tool.
+"""
+impl BaseLLM._attempt_recovery(mt_run: MTRuntime) -> CompletionResult | None {
+    finish_tool_obj = mt_run.get_tool("finish_tool");
+    if not finish_tool_obj
+    or mt_run.resp_type is None
+    or mt_run.resp_type is str {
+        return None;
+    }
+    recovery_msg = Message(
+        role=MessageRole.USER,
+        content="You must use finish_tool to return your response. Call finish_tool now.",
+    );
+    mt_run.add_message(recovery_msg);
+    original_tools = mt_run.tools;
+    mt_run.tools = [finish_tool_obj];
+    try {
+        return self.dispatch_no_streaming(mt_run);
+    } finally {
+        mt_run.tools = original_tools;
+    }
+}
+
+"""Process a recovery CompletionResult for streaming, yielding StreamEvents.
+
+Shared by both the OutputConversionError and no-tool-call recovery paths
+in _invoke_streaming. Appends usage, checks for finish_tool, yields
+steps_done, and either streams the final answer or yields the raw output.
+"""
+impl BaseLLM._yield_recovery_result(
+    recovery_resp: CompletionResult,
+    iter_count: int,
+    mt_run: MTRuntime
+) -> Generator[StreamEvent, None, None] {
+    self._usage_history.append(recovery_resp.usage);
+    finish_found = False;
+    if recovery_resp.tool_calls {
+        for tool_call in recovery_resp.tool_calls {
+            if tool_call.is_finish_call() {
+                mt_run.add_message(tool_call());
+                finish_found = True;
+                break;
+            }
+        }
+    }
+    yield StreamEvent(
+        event_type="steps_done", data={"iterations": iter_count}
+    );
+    if finish_found {
+        for token in self._stream_final_answer(mt_run) {
+            if token {
+                yield StreamEvent(event_type="chunk", data={"content": token});
+            }
+        }
+    } elif recovery_resp.output {
+        yield StreamEvent(
+            event_type="chunk",
+            data={"content": str(recovery_resp.output)}
+        );
     }
 }
 
@@ -397,59 +437,11 @@ impl BaseLLM._invoke_streaming(
             try {
                 resp = self.dispatch_no_streaming(mt_run);
             } except OutputConversionError {
-                # gpt-4o returned plain text that can't be parsed.
-                # Attempt recovery with finish_tool if available.
-                finish_tool_obj = mt_run.get_tool("finish_tool");
-                if finish_tool_obj
-                and mt_run.resp_type is not None
-                and mt_run.resp_type is not str {
-                    recovery_msg = Message(
-                        role=MessageRole.USER,
-                        content="You must use finish_tool to return your response. Call finish_tool now.",
-                    );
-                    mt_run.add_message(recovery_msg);
-                    original_tools = mt_run.tools;
-                    mt_run.tools = [finish_tool_obj];
-                    try {
-                        recovery_resp = self.dispatch_no_streaming(mt_run);
-                        self._usage_history.append(recovery_resp.usage);
-                        if recovery_resp.tool_calls {
-                            for tool_call in recovery_resp.tool_calls {
-                                if tool_call.is_finish_call() {
-                                    mt_run.add_message(tool_call());
-                                    yield StreamEvent(
-                                        event_type="steps_done",
-                                        data={"iterations": iter_count}
-                                    );
-                                    for token in self._stream_final_answer(mt_run) {
-                                        if token {
-                                            yield StreamEvent(
-                                                event_type="chunk",
-                                                data={"content": token}
-                                            );
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        # If recovery didn't produce finish_tool, yield whatever we got
-                        yield StreamEvent(
-                            event_type="steps_done", data={"iterations": iter_count}
-                        );
-                        if recovery_resp.output {
-                            yield StreamEvent(
-                                event_type="chunk",
-                                data={"content": str(recovery_resp.output)}
-                            );
-                        }
-                        break;
-                    } finally {
-                        mt_run.tools = original_tools;
-                    }
-                }
-                # No recovery possible — re-raise
-                raise ;
+                # gpt-4o returned plain text that can't be parsed — attempt recovery.
+                recovery_resp = self._attempt_recovery(mt_run);
+                if recovery_resp is None { raise; }
+                yield from self._yield_recovery_result(recovery_resp, iter_count, mt_run);
+                break;
             }
             self._usage_history.append(resp.usage);
 
@@ -519,55 +511,8 @@ impl BaseLLM._invoke_streaming(
                 # No tool calls — check if recovery is needed.
                 # (OutputConversionError catch above handles real Model;
                 # this branch handles MockLLM which bypasses parse_response.)
-                finish_tool_obj = mt_run.get_tool("finish_tool");
-                if finish_tool_obj
-                and mt_run.resp_type is not None
-                and mt_run.resp_type is not str {
-                    recovery_msg = Message(
-                        role=MessageRole.USER,
-                        content="You must use finish_tool to return your response. Call finish_tool now.",
-                    );
-                    mt_run.add_message(recovery_msg);
-                    original_tools = mt_run.tools;
-                    mt_run.tools = [finish_tool_obj];
-                    try {
-                        recovery_resp = self.dispatch_no_streaming(mt_run);
-                        self._usage_history.append(recovery_resp.usage);
-                        if recovery_resp.tool_calls {
-                            for tool_call in recovery_resp.tool_calls {
-                                if tool_call.is_finish_call() {
-                                    mt_run.add_message(tool_call());
-                                    yield StreamEvent(
-                                        event_type="steps_done",
-                                        data={"iterations": iter_count}
-                                    );
-                                    for token in self._stream_final_answer(mt_run) {
-                                        if token {
-                                            yield StreamEvent(
-                                                event_type="chunk",
-                                                data={"content": token}
-                                            );
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        # If recovery didn't produce finish_tool, yield whatever we got
-                        yield StreamEvent(
-                            event_type="steps_done", data={"iterations": iter_count}
-                        );
-                        if recovery_resp.output {
-                            yield StreamEvent(
-                                event_type="chunk",
-                                data={"content": str(recovery_resp.output)}
-                            );
-                        }
-                        break;
-                    } finally {
-                        mt_run.tools = original_tools;
-                    }
-                } else {
+                recovery_resp = self._attempt_recovery(mt_run);
+                if recovery_resp is None {
                     # Plain string return or no finish_tool — yield and exit
                     yield StreamEvent(
                         event_type="steps_done", data={"iterations": iter_count}
@@ -579,6 +524,8 @@ impl BaseLLM._invoke_streaming(
                     }
                     break;
                 }
+                yield from self._yield_recovery_result(recovery_resp, iter_count, mt_run);
+                break;
             }
         }
     }

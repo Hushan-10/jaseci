@@ -75,6 +75,12 @@ obj BaseLLM {
     def model_call_no_stream(params: dict) -> dict;
     def model_call_with_stream(params: dict) -> Generator[str, None, None];
     def _stream_final_answer(mt_run: MTRuntime) -> Generator[str, None, None];
+    def _attempt_recovery(mt_run: MTRuntime) -> CompletionResult | None;
+    def _yield_recovery_result(
+        recovery_resp: CompletionResult,
+        iter_count: int,
+        mt_run: MTRuntime
+    ) -> Generator[StreamEvent, None, None];
     def _invoke_streaming(mt_run: MTRuntime) -> Generator[StreamEvent, None, None];
 }
 
