@@ -701,15 +701,17 @@ With `logging=True`, the user sees the first `tool_call` event after just one LL
 The final `StreamEvent` in every `logging=True` stream is a `usage` event containing aggregated token counts across all LLM calls in that invocation:
 
 ```jac
-for event in my_function("input") {
-    if event.event_type == "usage" {
-        # Aggregated totals across all LLM calls
-        print(event.data["total"]);
-        # e.g. {"prompt_tokens": 1200, "completion_tokens": 85, "total_tokens": 1285}
+with entry {
+    for event in my_function("input") {
+        if event.event_type == "usage" {
+            # Aggregated totals across all LLM calls
+            print(event.data["total"]);
+            # e.g. {"prompt_tokens": 1200, "completion_tokens": 85, "total_tokens": 1285}
 
-        # Per-call breakdown (one dict per LLM call in the ReAct loop)
-        for call_usage in event.data["per_call"] {
-            print(call_usage);
+            # Per-call breakdown (one dict per LLM call in the ReAct loop)
+            for call_usage in event.data["per_call"] {
+                print(call_usage);
+            }
         }
     }
 }
