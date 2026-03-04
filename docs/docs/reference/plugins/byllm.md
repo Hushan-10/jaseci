@@ -610,11 +610,11 @@ with entry {
 ```
 
 !!! note
-    With `stream=True` alone (no `logging`), the user sees nothing during intermediate tool calls — only the final answer is streamed. For visibility into intermediate steps, add `logging=True`.
+    With `stream=True` alone (no `logging`), the user sees nothing during intermediate tool calls -- only the final answer is streamed. For visibility into intermediate steps, add `logging=True`.
 
 ### Streaming with Logging (`StreamEvent`)
 
-Add `logging=True` alongside `stream=True` to get `StreamEvent` objects that expose every intermediate step — tool calls, tool results, reasoning thoughts — in real time:
+Add `logging=True` alongside `stream=True` to get `StreamEvent` objects that expose every intermediate step -- tool calls, tool results, reasoning thoughts -- in real time:
 
 ```jac
 import from byllm.lib { StreamEvent }
