@@ -65,7 +65,9 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
         } except OutputConversionError {
             # gpt-4o returned plain text that can't be parsed — attempt recovery.
             recovery_resp = self._attempt_recovery(mt_run);
-            if recovery_resp is None { raise; }
+            if recovery_resp is None {
+                raise ;
+            }
             if recovery_resp.tool_calls {
                 for tool_call in recovery_resp.tool_calls {
                     if tool_call.is_finish_call() {
@@ -97,7 +99,9 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
             # (This also handles subclasses like MockLLM that bypass parse_response
             # and thus don't trigger OutputConversionError.)
             recovery_resp = self._attempt_recovery(mt_run);
-            if recovery_resp is None { break; }
+            if recovery_resp is None {
+                break;
+            }
             if recovery_resp.tool_calls {
                 for tool_call in recovery_resp.tool_calls {
                     if tool_call.is_finish_call() {
@@ -336,9 +340,7 @@ Callers should check the returned CompletionResult's tool_calls for finish_tool.
 """
 impl BaseLLM._attempt_recovery(mt_run: MTRuntime) -> CompletionResult | None {
     finish_tool_obj = mt_run.get_tool("finish_tool");
-    if not finish_tool_obj
-    or mt_run.resp_type is None
-    or mt_run.resp_type is str {
+    if not finish_tool_obj or mt_run.resp_type is None or mt_run.resp_type is str {
         return None;
     }
     recovery_msg = Message(
@@ -362,9 +364,7 @@ in _invoke_streaming. Appends usage, checks for finish_tool, yields
 steps_done, and either streams the final answer or yields the raw output.
 """
 impl BaseLLM._yield_recovery_result(
-    recovery_resp: CompletionResult,
-    iter_count: int,
-    mt_run: MTRuntime
+    recovery_resp: CompletionResult, iter_count: int, mt_run: MTRuntime
 ) -> Generator[StreamEvent, None, None] {
     self._usage_history.append(recovery_resp.usage);
     finish_found = False;
@@ -377,9 +377,7 @@ impl BaseLLM._yield_recovery_result(
             }
         }
     }
-    yield StreamEvent(
-        event_type="steps_done", data={"iterations": iter_count}
-    );
+    yield StreamEvent(event_type="steps_done", data={"iterations": iter_count});
     if finish_found {
         for token in self._stream_final_answer(mt_run) {
             if token {
@@ -388,8 +386,7 @@ impl BaseLLM._yield_recovery_result(
         }
     } elif recovery_resp.output {
         yield StreamEvent(
-            event_type="chunk",
-            data={"content": str(recovery_resp.output)}
+            event_type="chunk", data={"content": str(recovery_resp.output)}
         );
     }
 }
@@ -439,8 +436,12 @@ impl BaseLLM._invoke_streaming(
             } except OutputConversionError {
                 # gpt-4o returned plain text that can't be parsed — attempt recovery.
                 recovery_resp = self._attempt_recovery(mt_run);
-                if recovery_resp is None { raise; }
-                yield from self._yield_recovery_result(recovery_resp, iter_count, mt_run);
+                if recovery_resp is None {
+                    raise ;
+                }
+                yield from self._yield_recovery_result(
+                    recovery_resp, iter_count, mt_run
+                );
                 break;
             }
             self._usage_history.append(resp.usage);
@@ -524,7 +525,9 @@ impl BaseLLM._invoke_streaming(
                     }
                     break;
                 }
-                yield from self._yield_recovery_result(recovery_resp, iter_count, mt_run);
+                yield from self._yield_recovery_result(
+                    recovery_resp, iter_count, mt_run
+                );
                 break;
             }
         }
