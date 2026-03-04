@@ -542,9 +542,9 @@ impl BaseLLM._invoke_streaming(
         per_call_dicts: list = [];
         for u in self._usage_history {
             # Usage may be a Pydantic model (LiteLLM) or a plain dict.
-            u_dict = u if isinstance(u, dict) else (
-                u.model_dump() if hasattr(u, "model_dump") else vars(u)
-            );
+            u_dict = u
+                if isinstance(u, dict)
+                else (u.model_dump() if u?.model_dump else vars(u));
             per_call_dicts.append(u_dict);
             for (k, v) in u_dict.items() {
                 if isinstance(v, (int, float)) {
@@ -553,8 +553,7 @@ impl BaseLLM._invoke_streaming(
             }
         }
         yield StreamEvent(
-            event_type="usage",
-            data={"total": totals, "per_call": per_call_dicts}
+            event_type="usage", data={"total": totals, "per_call": per_call_dicts}
         );
         self._usage_history = [];
     }
