@@ -401,10 +401,14 @@ Works for both tool and non-tool streaming paths.
 impl BaseLLM._invoke_streaming(
     mt_run: MTRuntime
 ) -> Generator[StreamEvent, None, None] {
+    # Reset per-call usage accumulator so long-lived LLM instances don't leak memory.
+    self._usage_history = [];
     # No tools: wrap plain streaming tokens in StreamEvent
     if len(mt_run.tools) == 0 {
         for token in self.dispatch_streaming(mt_run) {
-            yield StreamEvent(event_type="chunk", data={"content": token});
+            if token {
+                yield StreamEvent(event_type="chunk", data={"content": token});
+            }
         }
     } else {
         # ReAct loop with tools
@@ -531,5 +535,27 @@ impl BaseLLM._invoke_streaming(
                 break;
             }
         }
+    }
+    # Emit aggregated usage from all LLM calls in this invocation, then reset.
+    if self._usage_history {
+        totals: dict = {};
+        per_call_dicts: list = [];
+        for u in self._usage_history {
+            # Usage may be a Pydantic model (LiteLLM) or a plain dict.
+            u_dict = u if isinstance(u, dict) else (
+                u.model_dump() if hasattr(u, "model_dump") else vars(u)
+            );
+            per_call_dicts.append(u_dict);
+            for (k, v) in u_dict.items() {
+                if isinstance(v, (int, float)) {
+                    totals[k] = totals.get(k, 0) + v;
+                }
+            }
+        }
+        yield StreamEvent(
+            event_type="usage",
+            data={"total": totals, "per_call": per_call_dicts}
+        );
+        self._usage_history = [];
     }
 }

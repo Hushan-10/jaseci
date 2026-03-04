@@ -77,5 +77,12 @@ with entry {
     last_tool_idx = len(event_types) - 1 - event_types[::-1].index("tool_result");
     assert last_tool_idx < first_chunk_idx , "Tool events should come before chunk events";
 
+    # Should have a usage event at the very end with aggregated token counts
+    usage_events = [e for e in events if e.event_type == "usage"];
+    assert len(usage_events) == 1 , f"Should have exactly 1 usage event, got: {len(usage_events)}";
+    assert "total" in usage_events[0].data , "Usage event should have 'total' field";
+    assert "per_call" in usage_events[0].data , "Usage event should have 'per_call' field";
+    assert usage_events[0] == events[-1] , "Usage event should be the last event";
+
     print("REACT_LOGGING_PASS");
 }
