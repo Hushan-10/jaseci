@@ -651,6 +651,7 @@ with entry {
 ```
 
 **Output:**
+
 ```
 Calling get_weather({'city': 'Tokyo'})
 Result: Weather in Tokyo: Sunny, 22°C
