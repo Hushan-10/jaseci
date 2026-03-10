@@ -20,21 +20,20 @@ cl {
                 summary = result["data"];
                 errorMsg = "";
             } elif result["error"] {
-                errorMsg = result["error"]["message"] or "Failed to load telemetry data";
+                errorMsg = result["error"]["message"]
+                or "Failed to load telemetry data";
             }
             isLoading = False;
         }
 
-        useEffect(lambda -> None { loadSummary(); }, []);
+        useEffect(lambda -> None { loadSummary();}, []);
 
         useEffect(
-            lambda -> any {
-                if not autoRefresh {
-                    return undefined;
-                }
-                interval = setInterval(lambda -> None { loadSummary(); }, 5000);
-                return lambda -> None { clearInterval(interval); };
-            },
+            lambda -> any { if not autoRefresh {
+                return undefined;
+            }interval = setInterval(lambda -> None { loadSummary();}, 5000);return lambda -> None { clearInterval(
+                interval
+            );}; },
             [autoRefresh]
         );
 
@@ -92,24 +91,25 @@ cl {
                         LLM Telemetry
                     </h2>
                     <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+                        <label
+                            className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer"
+                        >
                             <input
                                 type="checkbox"
                                 checked={autoRefresh}
-                                onChange={lambda e: any -> None { autoRefresh = e.target.checked; }}
+                                onChange={lambda e: any  -> None { autoRefresh = e.target.checked;}}
                                 className="rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
                             />
                             Auto-refresh
                         </label>
                         <Button
-                            onClick={lambda -> None { isLoading = True; loadSummary(); }}
+                            onClick={lambda -> None { isLoading = True;loadSummary();}}
                             variant="secondary"
                         >
                             Refresh
                         </Button>
                     </div>
                 </div>
-
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
                         <div className="text-sm text-slate-500 mb-1">
@@ -122,7 +122,6 @@ cl {
                             {str(summary["total_llm_calls"] or 0) + " LLM calls"}
                         </div>
                     </div>
-
                     <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
                         <div className="text-sm text-slate-500 mb-1">
                             Total Tokens
@@ -131,7 +130,6 @@ cl {
                             {formatTokens(summary["total_tokens"] or 0)}
                         </div>
                     </div>
-
                     <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
                         <div className="text-sm text-slate-500 mb-1">
                             Total Cost
@@ -140,8 +138,9 @@ cl {
                             {formatCost(summary["total_cost"] or 0)}
                         </div>
                     </div>
-
-                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
+                    <div
+                        className="bg-slate-900 border border-slate-800 rounded-lg p-5"
+                    >
                         <div className="text-sm text-slate-500 mb-1">
                             Avg Latency
                         </div>
@@ -153,122 +152,134 @@ cl {
                         </div>
                     </div>
                 </div>
-
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
                         <h3 className="text-lg font-semibold text-white mb-4">
                             Per Model
                         </h3>
                         {modelKeys.length == 0
-                            and <div className="text-slate-500 text-sm">
-                                No model data yet
-                            </div>}
+                        and <div className="text-slate-500 text-sm">
+                            No model data yet
+                        </div>}
                         {modelKeys.length > 0
-                            and <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="text-slate-400 border-b border-slate-700">
-                                            <th className="text-left py-2 pr-4">
-                                                Model
-                                            </th>
-                                            <th className="text-right py-2 px-2">
-                                                Calls
-                                            </th>
-                                            <th className="text-right py-2 px-2">
-                                                Tokens
-                                            </th>
-                                            <th className="text-right py-2 px-2">
-                                                Cost
-                                            </th>
-                                            <th className="text-right py-2 pl-2">
-                                                Errors
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {[
-                                            <tr
-                                                key={m}
-                                                className="border-b border-slate-800 text-slate-300"
+                        and <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr
+                                        className="text-slate-400 border-b border-slate-700"
+                                    >
+                                        <th className="text-left py-2 pr-4">
+                                            Model
+                                        </th>
+                                        <th className="text-right py-2 px-2">
+                                            Calls
+                                        </th>
+                                        <th className="text-right py-2 px-2">
+                                            Tokens
+                                        </th>
+                                        <th className="text-right py-2 px-2">
+                                            Cost
+                                        </th>
+                                        <th className="text-right py-2 pl-2">
+                                            Errors
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {[
+                                        <tr
+                                            key={m}
+                                            className="border-b border-slate-800 text-slate-300"
+                                        >
+                                            <td
+                                                className="py-2 pr-4 font-mono text-teal-300"
                                             >
-                                                <td className="py-2 pr-4 font-mono text-teal-300">
-                                                    {m}
-                                                </td>
-                                                <td className="text-right py-2 px-2">
-                                                    {perModel[m]["calls"]}
-                                                </td>
-                                                <td className="text-right py-2 px-2">
-                                                    {formatTokens(perModel[m]["tokens"])}
-                                                </td>
-                                                <td className="text-right py-2 px-2 text-amber-400">
-                                                    {formatCost(perModel[m]["cost"])}
-                                                </td>
-                                                <td className="text-right py-2 pl-2">
-                                                    {str(perModel[m]["errors"])}
-                                                </td>
-                                            </tr> for m in modelKeys
-                                        ]}
-                                    </tbody>
-                                </table>
-                            </div>}
+                                                {m}
+                                            </td>
+                                            <td className="text-right py-2 px-2">
+                                                {perModel[m]["calls"]}
+                                            </td>
+                                            <td className="text-right py-2 px-2">
+                                                {formatTokens(perModel[m]["tokens"])}
+                                            </td>
+                                            <td
+                                                className="text-right py-2 px-2 text-amber-400"
+                                            >
+                                                {formatCost(perModel[m]["cost"])}
+                                            </td>
+                                            <td className="text-right py-2 pl-2">
+                                                {str(perModel[m]["errors"])}
+                                            </td>
+                                        </tr> for m in modelKeys
+                                    ]}
+                                </tbody>
+                            </table>
+                        </div>}
                     </div>
-
-                    <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
+                    <div
+                        className="bg-slate-900 border border-slate-800 rounded-lg p-5"
+                    >
                         <h3 className="text-lg font-semibold text-white mb-4">
                             Per Caller
                         </h3>
                         {callerKeys.length == 0
-                            and <div className="text-slate-500 text-sm">
-                                No caller data yet
-                            </div>}
+                        and <div className="text-slate-500 text-sm">
+                            No caller data yet
+                        </div>}
                         {callerKeys.length > 0
-                            and <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
-                                    <thead>
-                                        <tr className="text-slate-400 border-b border-slate-700">
-                                            <th className="text-left py-2 pr-4">
-                                                Caller
-                                            </th>
-                                            <th className="text-right py-2 px-2">
-                                                Calls
-                                            </th>
-                                            <th className="text-right py-2 px-2">
-                                                Tokens
-                                            </th>
-                                            <th className="text-right py-2 px-2">
-                                                Cost
-                                            </th>
-                                            <th className="text-right py-2 pl-2">
-                                                Errors
-                                            </th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {[
-                                            <tr
-                                                key={c}
-                                                className="border-b border-slate-800 text-slate-300"
+                        and <div className="overflow-x-auto">
+                            <table className="w-full text-sm">
+                                <thead>
+                                    <tr
+                                        className="text-slate-400 border-b border-slate-700"
+                                    >
+                                        <th className="text-left py-2 pr-4">
+                                            Caller
+                                        </th>
+                                        <th className="text-right py-2 px-2">
+                                            Calls
+                                        </th>
+                                        <th className="text-right py-2 px-2">
+                                            Tokens
+                                        </th>
+                                        <th className="text-right py-2 px-2">
+                                            Cost
+                                        </th>
+                                        <th className="text-right py-2 pl-2">
+                                            Errors
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {[
+                                        <tr
+                                            key={c}
+                                            className="border-b border-slate-800 text-slate-300"
+                                        >
+                                            <td
+                                                className="py-2 pr-4 font-mono text-purple-300"
                                             >
-                                                <td className="py-2 pr-4 font-mono text-purple-300">
-                                                    {c}
-                                                </td>
-                                                <td className="text-right py-2 px-2">
-                                                    {perCaller[c]["calls"]}
-                                                </td>
-                                                <td className="text-right py-2 px-2">
-                                                    {formatTokens(perCaller[c]["tokens"])}
-                                                </td>
-                                                <td className="text-right py-2 px-2 text-amber-400">
-                                                    {formatCost(perCaller[c]["cost"])}
-                                                </td>
-                                                <td className="text-right py-2 pl-2">
-                                                    {str(perCaller[c]["errors"])}
-                                                </td>
-                                            </tr> for c in callerKeys
-                                        ]}
-                                    </tbody>
-                                </table>
-                            </div>}
+                                                {c}
+                                            </td>
+                                            <td className="text-right py-2 px-2">
+                                                {perCaller[c]["calls"]}
+                                            </td>
+                                            <td className="text-right py-2 px-2">
+                                                {formatTokens(perCaller[c]["tokens"])}
+                                            </td>
+                                            <td
+                                                className="text-right py-2 px-2 text-amber-400"
+                                            >
+                                                {formatCost(perCaller[c]["cost"])}
+                                            </td>
+                                            <td className="text-right py-2 pl-2">
+                                                {str(perCaller[c]["errors"])}
+                                            </td>
+                                        </tr> for c in callerKeys
+                                    ]}
+                                </tbody>
+                            </table>
+                        </div>}
                     </div>
                 </div>
             </div>;

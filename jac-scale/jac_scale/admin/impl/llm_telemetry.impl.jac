@@ -95,8 +95,12 @@ class Trace {
             "caller_name": self.caller_name,
             "caller_args": self.caller_args,
             "model": self.model,
-            "user_prompt": self.user_prompt[:500] if not include_detail else self.user_prompt,
-            "agent_response": self.agent_response[:500] if not include_detail else self.agent_response,
+            "user_prompt": self.user_prompt[:500]
+                if not include_detail
+                else self.user_prompt,
+            "agent_response": self.agent_response[:500]
+                if not include_detail
+                else self.agent_response,
             "total_latency_ms": round(self.total_latency_ms, 2),
             "total_tokens": self.total_tokens,
             "total_cost": round(self.total_cost, 6),
@@ -123,20 +127,18 @@ class Trace {
 
 class TelemetryStore {
     """Thread-safe in-memory telemetry store with trace correlation."""
-
-    def __init__(self: TelemetryStore, max_traces: int = 1000) -> None {
+    def init(self: TelemetryStore, max_traces: int = 1000) -> None {
         self._lock = threading.Lock();
         self._traces: OrderedDict = OrderedDict();
         self._max_traces = max_traces;
     }
 
+    # Called by JacLLMLogger for each individual LLM API call.
+    # Creates/updates a Trace based on invocation_id in metadata.
     def record_llm_event(self: TelemetryStore, event: dict) -> None {
-        """Called by JacLLMLogger for each individual LLM API call.
-        Creates/updates a Trace based on invocation_id in metadata."""
         with self._lock {
             metadata = event.get("metadata", {}) or {};
             inv_id = metadata.get("jac_invocation_id") or str(uuid.uuid4());
-
             if inv_id not in self._traces {
                 self._traces[inv_id] = Trace(
                     invocation_id=inv_id,
@@ -146,7 +148,6 @@ class TelemetryStore {
                 );
             }
             trace = self._traces[inv_id];
-
             call_record = LLMCallRecord(
                 call_id=event.get("id") or str(uuid.uuid4()),
                 model=event.get("model"),
@@ -165,7 +166,6 @@ class TelemetryStore {
             trace.total_tokens += call_record.total_tokens;
             trace.total_cost += call_record.response_cost;
             trace.llm_call_count += 1;
-
             # Evict oldest traces if over capacity
             while len(self._traces) > self._max_traces {
                 self._traces.popitem(last=False);
@@ -173,8 +173,8 @@ class TelemetryStore {
         }
     }
 
+    # Called by byllm agent callback. Finalizes the Trace with agent-level data.
     def record_agent_completion(self: TelemetryStore, record: dict) -> None {
-        """Called by byllm agent callback. Finalizes the Trace with agent-level data."""
         with self._lock {
             inv_id = record.get("invocation_id");
             if inv_id and inv_id in self._traces {
@@ -221,10 +221,9 @@ class TelemetryStore {
         status: str | None = None,
         caller: str | None = None
     ) -> dict {
-        """Return traces newest-first with optional filters."""
+        # Return traces newest-first with optional filters.
         with self._lock {
             all_traces = list(reversed(self._traces.values()));
-
             # Backfill streaming responses from LLM call data
             # byllm contract: tool-based agents ALWAYS end with finish_tool(final_output=...)
             for t in all_traces {
@@ -241,11 +240,15 @@ class TelemetryStore {
                                 # Direct text response (no tools used)
                                 if _msg.get("content") {
                                     t.agent_response = str(_msg.get("content"))[:2000];
-                                # Tool-based: byllm ALWAYS uses finish_tool as last call
+                                    # Tool-based: byllm ALWAYS uses finish_tool as last call
                                 } elif _msg.get("tool_calls") {
                                     for _tc in _msg.get("tool_calls", []) {
-                                        if hasattr(_tc, "get") and hasattr(_tc.get("function", {}), "get") and _tc.get("function", {}).get("name") == "finish_tool" {
-                                            _args = _tc.get("function", {}).get("arguments", "");
+                                        if _tc?.get
+                                        and hasattr(_tc.get("function", {}), "get")
+                                        and _tc.get("function", {}).get("name") == "finish_tool" {
+                                            _args = _tc.get("function", {}).get(
+                                                "arguments", ""
+                                            );
                                             if hasattr(_args, "strip") {
                                                 try {
                                                     _args = json_module.loads(_args);
@@ -254,7 +257,9 @@ class TelemetryStore {
                                                 }
                                             }
                                             if hasattr(_args, "get") {
-                                                t.agent_response = str(_args.get("final_output", _args))[:2000];
+                                                t.agent_response = str(
+                                                    _args.get("final_output", _args)
+                                                )[:2000];
                                             } else {
                                                 t.agent_response = str(_args)[:2000];
                                             }
@@ -269,21 +274,30 @@ class TelemetryStore {
                     }
                 }
             }
-
             # Apply filters
             if model {
-                all_traces = [t for t in all_traces if t.model == model];
+                all_traces = [
+                    t
+                    for t in all_traces
+                    if t.model == model
+                ];
             }
             if status {
-                all_traces = [t for t in all_traces if t.status == status];
+                all_traces = [
+                    t
+                    for t in all_traces
+                    if t.status == status
+                ];
             }
             if caller {
-                all_traces = [t for t in all_traces if t.caller_name == caller];
+                all_traces = [
+                    t
+                    for t in all_traces
+                    if t.caller_name == caller
+                ];
             }
-
             total = len(all_traces);
             page = all_traces[offset:offset + limit];
-
             return {
                 "traces": [t.to_dict() for t in page],
                 "total": total,
@@ -292,8 +306,8 @@ class TelemetryStore {
         }
     }
 
+    # Single trace with full detail (conversation history, all LLM calls).
     def get_trace(self: TelemetryStore, invocation_id: str) -> dict | None {
-        """Single trace with full detail (conversation history, all LLM calls)."""
         with self._lock {
             trace = self._traces.get(invocation_id);
             if trace {
@@ -312,8 +326,12 @@ class TelemetryStore {
                                     trace.agent_response = str(_msg.get("content"))[:2000];
                                 } elif _msg.get("tool_calls") {
                                     for _tc in _msg.get("tool_calls", []) {
-                                        if hasattr(_tc, "get") and hasattr(_tc.get("function", {}), "get") and _tc.get("function", {}).get("name") == "finish_tool" {
-                                            _args = _tc.get("function", {}).get("arguments", "");
+                                        if _tc?.get
+                                        and hasattr(_tc.get("function", {}), "get")
+                                        and _tc.get("function", {}).get("name") == "finish_tool" {
+                                            _args = _tc.get("function", {}).get(
+                                                "arguments", ""
+                                            );
                                             if hasattr(_args, "strip") {
                                                 try {
                                                     _args = json_module.loads(_args);
@@ -322,7 +340,9 @@ class TelemetryStore {
                                                 }
                                             }
                                             if hasattr(_args, "get") {
-                                                trace.agent_response = str(_args.get("final_output", _args))[:2000];
+                                                trace.agent_response = str(
+                                                    _args.get("final_output", _args)
+                                                )[:2000];
                                             } else {
                                                 trace.agent_response = str(_args)[:2000];
                                             }
@@ -342,8 +362,8 @@ class TelemetryStore {
         }
     }
 
+    # Aggregate stats across all traces.
     def get_summary(self: TelemetryStore) -> dict {
-        """Aggregate stats across all traces."""
         with self._lock {
             traces_list = list(self._traces.values());
             if not traces_list {
@@ -358,23 +378,27 @@ class TelemetryStore {
                     "per_caller": {}
                 };
             }
-
             total_invocations = len(traces_list);
             total_llm_calls = sum(t.llm_call_count for t in traces_list);
             total_tokens = sum(t.total_tokens for t in traces_list);
             total_cost = sum(t.total_cost for t in traces_list);
-            latencies = [t.total_latency_ms for t in traces_list if t.total_latency_ms > 0];
+            latencies = [
+                t.total_latency_ms
+                for t in traces_list
+                if t.total_latency_ms > 0
+            ];
             avg_latency = sum(latencies) / len(latencies) if latencies else 0.0;
-            error_count = sum(1 for t in traces_list if t.status == "error");
-
+            error_count = sum(
+                1
+                for t in traces_list
+                if t.status == "error"
+            );
             # Per-model breakdown
             per_model: dict = {};
             for t in traces_list {
                 m = t.model or "unknown";
                 if m not in per_model {
-                    per_model[m] = {
-                        "calls": 0, "tokens": 0, "cost": 0.0, "errors": 0
-                    };
+                    per_model[m] = {"calls": 0, "tokens": 0, "cost": 0.0, "errors": 0};
                 }
                 per_model[m]["calls"] += 1;
                 per_model[m]["tokens"] += t.total_tokens;
@@ -383,15 +407,12 @@ class TelemetryStore {
                     per_model[m]["errors"] += 1;
                 }
             }
-
             # Per-caller breakdown
             per_caller: dict = {};
             for t in traces_list {
                 c = t.caller_name or "unknown";
                 if c not in per_caller {
-                    per_caller[c] = {
-                        "calls": 0, "tokens": 0, "cost": 0.0, "errors": 0
-                    };
+                    per_caller[c] = {"calls": 0, "tokens": 0, "cost": 0.0, "errors": 0};
                 }
                 per_caller[c]["calls"] += 1;
                 per_caller[c]["tokens"] += t.total_tokens;
@@ -400,7 +421,6 @@ class TelemetryStore {
                     per_caller[c]["errors"] += 1;
                 }
             }
-
             # Round cost values
             for m_stats in per_model.values() {
                 m_stats["cost"] = round(m_stats["cost"], 6);
@@ -408,7 +428,6 @@ class TelemetryStore {
             for c_stats in per_caller.values() {
                 c_stats["cost"] = round(c_stats["cost"], 6);
             }
-
             return {
                 "total_invocations": total_invocations,
                 "total_llm_calls": total_llm_calls,
@@ -422,12 +441,30 @@ class TelemetryStore {
         }
     }
 
+    # Return unique model names, callers, and statuses for filter dropdowns.
     def get_available_filters(self: TelemetryStore) -> dict {
-        """Return unique model names, callers, and statuses for filter dropdowns."""
         with self._lock {
-            models = list(set(t.model for t in self._traces.values() if t.model));
-            callers = list(set(t.caller_name for t in self._traces.values() if t.caller_name));
-            statuses = list(set(t.status for t in self._traces.values() if t.status));
+            models = list(
+                set(
+                    t.model
+                    for t in self._traces.values()
+                    if t.model
+                )
+            );
+            callers = list(
+                set(
+                    t.caller_name
+                    for t in self._traces.values()
+                    if t.caller_name
+                )
+            );
+            statuses = list(
+                set(
+                    t.status
+                    for t in self._traces.values()
+                    if t.status
+                )
+            );
             return {
                 "models": sorted(models),
                 "callers": sorted(callers),
@@ -456,8 +493,7 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
         import from litellm.integrations.custom_logger { CustomLogger }
 
         class JacLLMLogger(CustomLogger) {
-
-            def __init__(self: JacLLMLogger, telemetry_store: TelemetryStore) -> None {
+            def init(self: JacLLMLogger, telemetry_store: TelemetryStore) -> None {
                 self.store = telemetry_store;
                 CustomLogger.__init__(self);
             }
@@ -471,22 +507,27 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
             ) -> None {
                 try {
                     slp = kwargs.get("standard_logging_object", {}) or {};
-                    metadata = kwargs.get("litellm_params", {}).get("metadata", {}) or {};
-                    self.store.record_llm_event({
-                        "id": slp.get("id"),
-                        "model": slp.get("model") or kwargs.get("model"),
-                        "response_cost": slp.get("response_cost") or 0.0,
-                        "prompt_tokens": slp.get("prompt_tokens") or 0,
-                        "completion_tokens": slp.get("completion_tokens") or 0,
-                        "total_tokens": slp.get("total_tokens") or 0,
-                        "response_time": slp.get("response_time") or 0,
-                        "status": "success",
-                        "messages": slp.get("messages"),
-                        "response": slp.get("response"),
-                        "startTime": start_time.timestamp() if hasattr(start_time, 'timestamp') else time.time(),
-                        "metadata": metadata,
-                        "error_str": None
-                    });
+                    metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+                    or {};
+                    self.store.record_llm_event(
+                        {
+                            "id": slp.get("id"),
+                            "model": slp.get("model") or kwargs.get("model"),
+                            "response_cost": slp.get("response_cost") or 0.0,
+                            "prompt_tokens": slp.get("prompt_tokens") or 0,
+                            "completion_tokens": slp.get("completion_tokens") or 0,
+                            "total_tokens": slp.get("total_tokens") or 0,
+                            "response_time": slp.get("response_time") or 0,
+                            "status": "success",
+                            "messages": slp.get("messages"),
+                            "response": slp.get("response"),
+                            "startTime": start_time.timestamp()
+                                if start_time?.timestamp
+                                else time.time(),
+                            "metadata": metadata,
+                            "error_str": None
+                        }
+                    );
                 } except Exception as e {
                     logger.debug(f"JacLLMLogger.log_success_event error: {e}");
                 }
@@ -501,22 +542,28 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
             ) -> None {
                 try {
                     slp = kwargs.get("standard_logging_object", {}) or {};
-                    metadata = kwargs.get("litellm_params", {}).get("metadata", {}) or {};
-                    self.store.record_llm_event({
-                        "id": slp.get("id"),
-                        "model": slp.get("model") or kwargs.get("model"),
-                        "response_cost": 0.0,
-                        "prompt_tokens": slp.get("prompt_tokens") or 0,
-                        "completion_tokens": 0,
-                        "total_tokens": slp.get("prompt_tokens") or 0,
-                        "response_time": slp.get("response_time") or 0,
-                        "status": "error",
-                        "messages": slp.get("messages"),
-                        "response": None,
-                        "startTime": start_time.timestamp() if hasattr(start_time, 'timestamp') else time.time(),
-                        "metadata": metadata,
-                        "error_str": slp.get("error_str") or str(response_obj)[:500]
-                    });
+                    metadata = kwargs.get("litellm_params", {}).get("metadata", {})
+                    or {};
+                    self.store.record_llm_event(
+                        {
+                            "id": slp.get("id"),
+                            "model": slp.get("model") or kwargs.get("model"),
+                            "response_cost": 0.0,
+                            "prompt_tokens": slp.get("prompt_tokens") or 0,
+                            "completion_tokens": 0,
+                            "total_tokens": slp.get("prompt_tokens") or 0,
+                            "response_time": slp.get("response_time") or 0,
+                            "status": "error",
+                            "messages": slp.get("messages"),
+                            "response": None,
+                            "startTime": start_time.timestamp()
+                                if start_time?.timestamp
+                                else time.time(),
+                            "metadata": metadata,
+                            "error_str": slp.get("error_str")
+                            or str(response_obj)[:500]
+                        }
+                    );
                 } except Exception as e {
                     logger.debug(f"JacLLMLogger.log_failure_event error: {e}");
                 }
@@ -572,9 +619,7 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
     );
 
     # GET /admin/llm/telemetry/traces
-    async def traces_handler(
-        request: Request
-    ) -> JSONResponse {
+    async def traces_handler(request: Request) -> JSONResponse {
         auth_error = self.require_admin(request.headers.get("Authorization"));
         if auth_error {
             return JSONResponse(
@@ -597,11 +642,7 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
         status = qp.get("status") or None;
         caller = qp.get("caller") or None;
         data = store.get_traces(
-            limit=limit,
-            offset=offset,
-            model=model,
-            status=status,
-            caller=caller
+            limit=limit, offset=offset, model=model, status=status, caller=caller
         );
         return JSONResponse(content={"ok": True, "data": data});
     }
@@ -620,7 +661,9 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
     );
 
     # GET /admin/llm/telemetry/traces/{invocation_id}
-    async def trace_detail_handler(request: Request, invocation_id: str) -> JSONResponse {
+    async def trace_detail_handler(
+        request: Request, invocation_id: str
+    ) -> JSONResponse {
         auth_error = self.require_admin(request.headers.get("Authorization"));
         if auth_error {
             return JSONResponse(
@@ -686,5 +729,7 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
         )
     );
 
-    logger.info("LLM telemetry endpoints registered: /admin/llm/telemetry/{summary,traces,traces/{id},filters}");
+    logger.info(
+        "LLM telemetry endpoints registered: /admin/llm/telemetry/{summary,traces,traces/{id},filters}"
+    );
 }

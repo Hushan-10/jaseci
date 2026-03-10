@@ -43,16 +43,14 @@ cl {
             detailLoading = False;
         }
 
-        useEffect(lambda -> None { loadTraces(); }, []);
+        useEffect(lambda -> None { loadTraces();}, []);
 
         useEffect(
-            lambda -> any {
-                if not autoRefresh {
-                    return undefined;
-                }
-                interval = setInterval(lambda -> None { loadTraces(); }, 5000);
-                return lambda -> None { clearInterval(interval); };
-            },
+            lambda -> any { if not autoRefresh {
+                return undefined;
+            }interval = setInterval(lambda -> None { loadTraces();}, 5000);return lambda -> None { clearInterval(
+                interval
+            );}; },
             [autoRefresh]
         );
 
@@ -111,7 +109,7 @@ cl {
                 <div className="space-y-4">
                     <div className="flex items-center gap-3">
                         <Button
-                            onClick={lambda -> None { showDetail = False; selectedTrace = {}; }}
+                            onClick={lambda -> None { showDetail = False;selectedTrace = {};}}
                             variant="secondary"
                         >
                             Back to Traces
@@ -120,147 +118,186 @@ cl {
                             Trace Detail
                         </h2>
                     </div>
-
                     {detailLoading
-                        and <div className="flex items-center justify-center h-32">
-                            <div className="text-teal-400">
-                                Loading trace detail...
-                            </div>
-                        </div>}
-
-                    {not detailLoading and selectedTrace["invocation_id"]
-                        and <div className="space-y-4">
-                            <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-                                <h3 className="text-lg font-semibold text-white mb-3">
-                                    Agent Invocation
-                                </h3>
-                                <div className="grid grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <div className="text-slate-500 mb-1">
-                                            Invocation ID
-                                        </div>
-                                        <div className="text-white font-mono text-xs">
-                                            {selectedTrace["invocation_id"]}
-                                        </div>
+                    and <div className="flex items-center justify-center h-32">
+                        <div className="text-teal-400">
+                            Loading trace detail...
+                        </div>
+                    </div>}
+                    {not detailLoading
+                    and selectedTrace["invocation_id"]
+                    and <div className="space-y-4">
+                        <div
+                            className="bg-slate-900 border border-slate-800 rounded-lg p-5"
+                        >
+                            <h3 className="text-lg font-semibold text-white mb-3">
+                                Agent Invocation
+                            </h3>
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div>
+                                    <div className="text-slate-500 mb-1">
+                                        Invocation ID
                                     </div>
-                                    <div>
-                                        <div className="text-slate-500 mb-1">
-                                            Caller
-                                        </div>
-                                        <div className="text-purple-300 font-mono">
-                                            {selectedTrace["caller_name"] or "N/A"}
-                                        </div>
+                                    <div className="text-white font-mono text-xs">
+                                        {selectedTrace["invocation_id"]}
                                     </div>
-                                    <div>
-                                        <div className="text-slate-500 mb-1">
-                                            Status
-                                        </div>
-                                        <span className={getStatusBadge(selectedTrace["status"] or "unknown")}>
-                                            {selectedTrace["status"] or "unknown"}
-                                        </span>
+                                </div>
+                                <div>
+                                    <div className="text-slate-500 mb-1">
+                                        Caller
                                     </div>
-                                    <div>
-                                        <div className="text-slate-500 mb-1">
-                                            Latency
-                                        </div>
-                                        <div className="text-white">
-                                            {formatLatency(selectedTrace["total_latency_ms"] or 0)}
-                                        </div>
+                                    <div className="text-purple-300 font-mono">
+                                        {selectedTrace["caller_name"] or "N/A"}
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="text-slate-500 mb-1">
+                                        Status
+                                    </div>
+                                    <span
+                                        className={getStatusBadge(
+                                            selectedTrace["status"] or "unknown"
+                                        )}
+                                    >
+                                        {selectedTrace["status"] or "unknown"}
+                                    </span>
+                                </div>
+                                <div>
+                                    <div className="text-slate-500 mb-1">
+                                        Latency
+                                    </div>
+                                    <div className="text-white">
+                                        {formatLatency(
+                                            selectedTrace["total_latency_ms"] or 0
+                                        )}
                                     </div>
                                 </div>
                             </div>
-
-                            {selectedTrace["user_prompt"]
-                                and <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-                                    <h3 className="text-sm font-semibold text-slate-400 mb-2">
-                                        User Prompt
-                                    </h3>
-                                    <pre className="text-white text-sm whitespace-pre-wrap font-mono bg-slate-800 p-3 rounded max-h-48 overflow-y-auto">
-                                        {selectedTrace["user_prompt"]}
-                                    </pre>
-                                </div>}
-
-                            {selectedTrace["agent_response"]
-                                and <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-                                    <h3 className="text-sm font-semibold text-slate-400 mb-2">
-                                        Agent Response
-                                    </h3>
-                                    <pre className="text-white text-sm whitespace-pre-wrap font-mono bg-slate-800 p-3 rounded max-h-48 overflow-y-auto">
-                                        {selectedTrace["agent_response"]}
-                                    </pre>
-                                </div>}
-
-                            <div className="bg-slate-900 border border-slate-800 rounded-lg p-5">
-                                <h3 className="text-lg font-semibold text-white mb-3">
-                                    LLM Calls ({str(len(selectedTrace["llm_calls"] or []))})
-                                </h3>
-                                {len(selectedTrace["llm_calls"] or []) == 0
-                                    and <div className="text-slate-500 text-sm">
-                                        No LLM calls recorded for this trace
-                                    </div>}
-                                {len(selectedTrace["llm_calls"] or []) > 0
-                                    and <div className="space-y-3">
-                                        {[
-                                            <div
-                                                key={str(call["timestamp"]) + str(call["model"])}
-                                                className="bg-slate-800 border border-slate-700 rounded-lg p-4"
-                                            >
-                                                <div className="flex items-center justify-between mb-2">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-teal-300 font-mono text-sm">
-                                                            {call["model"] or "unknown"}
-                                                        </span>
-                                                        <span className={getStatusBadge(call["status"] or "unknown")}>
-                                                            {call["status"] or "unknown"}
-                                                        </span>
-                                                    </div>
-                                                    <span className="text-slate-400 text-xs font-mono">
-                                                        {formatTimestamp(call["timestamp"] or "")}
-                                                    </span>
-                                                </div>
-                                                <div className="grid grid-cols-4 gap-3 text-xs">
-                                                    <div>
-                                                        <div className="text-slate-500">
-                                                            Tokens
-                                                        </div>
-                                                        <div className="text-white">
-                                                            {formatTokens(call["total_tokens"] or 0)}
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-slate-500">
-                                                            Prompt
-                                                        </div>
-                                                        <div className="text-white">
-                                                            {formatTokens(call["prompt_tokens"] or 0)}
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-slate-500">
-                                                            Completion
-                                                        </div>
-                                                        <div className="text-white">
-                                                            {formatTokens(call["completion_tokens"] or 0)}
-                                                        </div>
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-slate-500">
-                                                            Latency
-                                                        </div>
-                                                        <div className="text-white">
-                                                            {formatLatency(call["latency_ms"] or 0)}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                                {call["error"]
-                                                    and <div className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300 font-mono">
-                                                        {call["error"]}
-                                                    </div>}
-                                            </div> for call in (selectedTrace["llm_calls"] or [])
-                                        ]}
-                                    </div>}
-                            </div>
+                        </div>
+                        {selectedTrace["user_prompt"]
+                        and <div
+                            className="bg-slate-900 border border-slate-800 rounded-lg p-5"
+                        >
+                            <h3 className="text-sm font-semibold text-slate-400 mb-2">
+                                User Prompt
+                            </h3>
+                            <pre
+                                className="text-white text-sm whitespace-pre-wrap font-mono bg-slate-800 p-3 rounded max-h-48 overflow-y-auto"
+                            >
+                                {selectedTrace["user_prompt"]}
+                            </pre>
                         </div>}
+                        {selectedTrace["agent_response"]
+                        and <div
+                            className="bg-slate-900 border border-slate-800 rounded-lg p-5"
+                        >
+                            <h3 className="text-sm font-semibold text-slate-400 mb-2">
+                                Agent Response
+                            </h3>
+                            <pre
+                                className="text-white text-sm whitespace-pre-wrap font-mono bg-slate-800 p-3 rounded max-h-48 overflow-y-auto"
+                            >
+                                {selectedTrace["agent_response"]}
+                            </pre>
+                        </div>}
+                        <div
+                            className="bg-slate-900 border border-slate-800 rounded-lg p-5"
+                        >
+                            <h3 className="text-lg font-semibold text-white mb-3">
+                                LLM Calls ({str(len(selectedTrace["llm_calls"] or []))})
+                            </h3>
+                            {len(selectedTrace["llm_calls"] or []) == 0
+                            and <div className="text-slate-500 text-sm">
+                                No LLM calls recorded for this trace
+                            </div>}
+                            {len(selectedTrace["llm_calls"] or []) > 0
+                            and <div className="space-y-3">
+                                {[
+                                    <div
+                                        key={str(call["timestamp"]) + str(
+                                            call["model"]
+                                        )}
+                                        className="bg-slate-800 border border-slate-700 rounded-lg p-4"
+                                    >
+                                        <div
+                                            className="flex items-center justify-between mb-2"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <span
+                                                    className="text-teal-300 font-mono text-sm"
+                                                >
+                                                    {call["model"] or "unknown"}
+                                                </span>
+                                                <span
+                                                    className={getStatusBadge(
+                                                        call["status"] or "unknown"
+                                                    )}
+                                                >
+                                                    {call["status"] or "unknown"}
+                                                </span>
+                                            </div>
+                                            <span
+                                                className="text-slate-400 text-xs font-mono"
+                                            >
+                                                {formatTimestamp(
+                                                    call["timestamp"] or ""
+                                                )}
+                                            </span>
+                                        </div>
+                                        <div className="grid grid-cols-4 gap-3 text-xs">
+                                            <div>
+                                                <div className="text-slate-500">
+                                                    Tokens
+                                                </div>
+                                                <div className="text-white">
+                                                    {formatTokens(
+                                                        call["total_tokens"] or 0
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-slate-500">
+                                                    Prompt
+                                                </div>
+                                                <div className="text-white">
+                                                    {formatTokens(
+                                                        call["prompt_tokens"] or 0
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-slate-500">
+                                                    Completion
+                                                </div>
+                                                <div className="text-white">
+                                                    {formatTokens(
+                                                        call["completion_tokens"] or 0
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-slate-500">
+                                                    Latency
+                                                </div>
+                                                <div className="text-white">
+                                                    {formatLatency(
+                                                        call["latency_ms"] or 0
+                                                    )}
+                                                </div>
+                                            </div>
+                                        </div>
+                                        {call["error"]
+                                        and <div
+                                            className="mt-2 p-2 bg-red-500/10 border border-red-500/30 rounded text-xs text-red-300 font-mono"
+                                        >
+                                            {call["error"]}
+                                        </div>}
+                                    </div>
+                                    for call in (selectedTrace["llm_calls"] or [])
+                                ]}
+                            </div>}
+                        </div>
+                    </div>}
                 </div>;
         }
 
@@ -271,76 +308,86 @@ cl {
                         LLM Traces
                     </h2>
                     <div className="flex items-center gap-3">
-                        <label className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer">
+                        <label
+                            className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer"
+                        >
                             <input
                                 type="checkbox"
                                 checked={autoRefresh}
-                                onChange={lambda e: any -> None { autoRefresh = e.target.checked; }}
+                                onChange={lambda e: any  -> None { autoRefresh = e.target.checked;}}
                                 className="rounded border-slate-600 bg-slate-800 text-teal-500 focus:ring-teal-500"
                             />
                             Auto-refresh
                         </label>
                         <Button
-                            onClick={lambda -> None { isLoading = True; loadTraces(); }}
+                            onClick={lambda -> None { isLoading = True;loadTraces();}}
                             variant="secondary"
                         >
                             Refresh
                         </Button>
                     </div>
                 </div>
-
                 {len(traces) == 0
-                    and <div className="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center">
-                        <div className="text-slate-500 text-lg mb-2">
-                            No traces yet
-                        </div>
-                        <div className="text-slate-600 text-sm">
-                            Make some LLM calls to see traces here
-                        </div>
-                    </div>}
-
+                and <div
+                    className="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center"
+                >
+                    <div className="text-slate-500 text-lg mb-2">
+                        No traces yet
+                    </div>
+                    <div className="text-slate-600 text-sm">
+                        Make some LLM calls to see traces here
+                    </div>
+                </div>}
                 {len(traces) > 0
-                    and <div className="space-y-2">
-                        {[
-                            <div
-                                key={trace["invocation_id"]}
-                                className="bg-slate-900 border border-slate-800 rounded-lg p-4 cursor-pointer hover:border-teal-500/50 transition-colors"
-                                onClick={lambda -> None { loadTraceDetail(trace["invocation_id"]); }}
-                            >
-                                <div className="flex items-center justify-between">
-                                    <div className="flex items-center gap-3">
-                                        <span className={getStatusBadge(trace["status"] or "unknown")}>
-                                            {trace["status"] or "unknown"}
-                                        </span>
-                                        <span className="text-purple-300 font-mono text-sm">
-                                            {trace["caller_name"] or "unknown"}
-                                        </span>
-                                        <span className="text-slate-600 font-mono text-xs">
-                                            {trace["invocation_id"]}
-                                        </span>
-                                    </div>
-                                    <div className="flex items-center gap-4 text-xs text-slate-400">
-                                        <span>
-                                            {str(trace["llm_call_count"] or 0) + " calls"}
-                                        </span>
-                                        <span>
-                                            {formatTokens(trace["total_tokens"] or 0) + " tokens"}
-                                        </span>
-                                        <span>
-                                            {formatLatency(trace["total_latency_ms"] or 0)}
-                                        </span>
-                                        <span className="text-slate-500">
-                                            {formatTimestamp(trace["timestamp"] or "")}
-                                        </span>
-                                    </div>
+                and <div className="space-y-2">
+                    {[
+                        <div
+                            key={trace["invocation_id"]}
+                            className="bg-slate-900 border border-slate-800 rounded-lg p-4 cursor-pointer hover:border-teal-500/50 transition-colors"
+                            onClick={lambda -> None { loadTraceDetail(
+                                trace["invocation_id"]
+                            );}}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <span
+                                        className={getStatusBadge(
+                                            trace["status"] or "unknown"
+                                        )}
+                                    >
+                                        {trace["status"] or "unknown"}
+                                    </span>
+                                    <span className="text-purple-300 font-mono text-sm">
+                                        {trace["caller_name"] or "unknown"}
+                                    </span>
+                                    <span className="text-slate-600 font-mono text-xs">
+                                        {trace["invocation_id"]}
+                                    </span>
                                 </div>
-                                {trace["user_prompt"]
-                                    and <div className="mt-2 text-xs text-slate-500 truncate">
-                                        {trace["user_prompt"]}
-                                    </div>}
-                            </div> for trace in traces
-                        ]}
-                    </div>}
+                                <div
+                                    className="flex items-center gap-4 text-xs text-slate-400"
+                                >
+                                    <span>
+                                        {str(trace["llm_call_count"] or 0) + " calls"}
+                                    </span>
+                                    <span>
+                                        {formatTokens(trace["total_tokens"] or 0) + " tokens"}
+                                    </span>
+                                    <span>
+                                        {formatLatency(trace["total_latency_ms"] or 0)}
+                                    </span>
+                                    <span className="text-slate-500">
+                                        {formatTimestamp(trace["timestamp"] or "")}
+                                    </span>
+                                </div>
+                            </div>
+                            {trace["user_prompt"]
+                            and <div className="mt-2 text-xs text-slate-500 truncate">
+                                {trace["user_prompt"]}
+                            </div>}
+                        </div> for trace in traces
+                    ]}
+                </div>}
             </div>;
     }
 }
