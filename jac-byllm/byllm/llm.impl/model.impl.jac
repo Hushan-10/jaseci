@@ -27,12 +27,97 @@ impl Model.postinit -> None {
     }
 }
 
-"""Invoke the LLM, delegating to MockLLM if applicable."""
+"""Invoke the LLM, delegating to MockLLM if applicable.
+
+Wraps the full invocation (including ReAct loop) with telemetry.
+Generates a unique invocation_id shared across all LLM calls in
+this agent invocation via make_model_params metadata.
+"""
 impl Model.invoke(mt_run: MTRuntime) -> object {
-    if self._mock_delegate {
-        return self._mock_delegate.invoke(mt_run);
+    import uuid;
+    import time;
+
+    # Generate a unique ID for this entire agent invocation
+    # (shared across all LLM calls in the ReAct loop via make_model_params metadata)
+    mt_run._invocation_id = str(uuid.uuid4());
+    _start = time.time();
+
+    try {
+        # Delegate to mock or real LLM — existing logic, untouched
+        if self._mock_delegate {
+            result = self._mock_delegate.invoke(mt_run);
+        } else {
+            result = super.invoke(mt_run);
+        }
+
+        # Emit agent-level telemetry on success (fire-and-forget)
+        try {
+            _bt_mod = __import__("byllm.telemetry", fromlist=["_emit_agent_telemetry"]);
+            _emit_fn = _bt_mod._emit_agent_telemetry;
+            user_prompt = "";
+            try {
+                user_prompt = str(mt_run.messages[1].content[0].text)[:2000];
+            } except Exception {}
+            caller_args: dict = {};
+            try {
+                if mt_run.mtir and mt_run.mtir.args {
+                    for k in mt_run.mtir.args {
+                        caller_args[str(k)] = str(mt_run.mtir.args[k])[:500];
+                    }
+                }
+            } except Exception {}
+            conv_history: list = [];
+            try {
+                conv_history = mt_run.get_msg_list();
+            } except Exception {}
+            # Extract the real agent response text
+            import types as _types_mod;
+            _agent_resp = "";
+            if isinstance(result, _types_mod.GeneratorType) {
+                # Streaming: response not yet generated at this point
+                _agent_resp = "[streaming]";
+            } else {
+                # Non-streaming: use the parsed result directly
+                _agent_resp = str(result)[:2000];
+            }
+            _emit_fn({
+                "invocation_id": mt_run._invocation_id,
+                "caller_name": mt_run.mtir.caller.__name__ if mt_run.mtir else "unknown",
+                "caller_args": caller_args,
+                "user_prompt": user_prompt,
+                "agent_response": _agent_resp,
+                "conversation_history": conv_history,
+                "model": self.model_name,
+                "latency_ms": (time.time() - _start) * 1000,
+                "status": "success",
+                "error": None
+            });
+        } except Exception as _te {
+            import logging as _tlog;
+            _tlog.getLogger("byllm.telemetry").warning(f"Agent telemetry emit failed: {_te}");
+        }
+
+        return result;
+
+    } except Exception as e {
+        # Emit failure telemetry
+        try {
+            _bt_mod = __import__("byllm.telemetry", fromlist=["_emit_agent_telemetry"]);
+            _bt_mod._emit_agent_telemetry({
+                "invocation_id": mt_run._invocation_id,
+                "caller_name": mt_run.mtir.caller.__name__ if mt_run.mtir else "unknown",
+                "caller_args": {},
+                "user_prompt": "",
+                "agent_response": "",
+                "conversation_history": [],
+                "model": self.model_name,
+                "latency_ms": (time.time() - _start) * 1000,
+                "status": "error",
+                "error": str(e)[:1000]
+            });
+        } except Exception {}
+        raise;
     }
-    return super.invoke(mt_run);
 }
 
 """Make a direct model call without streaming.
