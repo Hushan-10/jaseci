@@ -148,6 +148,20 @@ class TelemetryStore {
                 );
             }
             trace = self._traces[inv_id];
+            # Cap stored payloads to bound memory usage
+            _raw_msgs = event.get("messages");
+            if isinstance(_raw_msgs, list) and len(_raw_msgs) > 20 {
+                _raw_msgs = _raw_msgs[-20:];
+            }
+            _raw_resp = event.get("response");
+            try {
+                _resp_str = json_module.dumps(_raw_resp);
+                if len(_resp_str) > 10240 {
+                    _raw_resp = _resp_str[:10240] + "...[truncated]";
+                }
+            } except (TypeError, ValueError) {
+                _raw_resp = str(_raw_resp)[:10240];
+            }
             call_record = LLMCallRecord(
                 call_id=event.get("id") or str(uuid.uuid4()),
                 model=event.get("model"),
@@ -158,8 +172,8 @@ class TelemetryStore {
                 latency_ms=(event.get("response_time") or 0) * 1000,
                 status=event.get("status") or "success",
                 error=event.get("error_str"),
-                messages=event.get("messages"),
-                response=event.get("response"),
+                messages=_raw_msgs,
+                response=_raw_resp,
                 timestamp=event.get("startTime") or time.time()
             );
             trace.llm_calls.append(call_record);
@@ -184,6 +198,11 @@ class TelemetryStore {
                 trace.user_prompt = record.get("user_prompt") or "";
                 trace.agent_response = record.get("agent_response") or "";
                 trace.conversation_history = record.get("conversation_history") or [];
+                # Cap conversation history to last 40 entries
+                if isinstance(trace.conversation_history, list)
+                and len(trace.conversation_history) > 40 {
+                    trace.conversation_history = trace.conversation_history[-40:];
+                }
                 trace.total_latency_ms = record.get("latency_ms") or 0;
                 trace.status = record.get("status") or "success";
                 trace.error = record.get("error");
@@ -198,7 +217,7 @@ class TelemetryStore {
                     model=record.get("model") or "unknown",
                     user_prompt=record.get("user_prompt") or "",
                     agent_response=record.get("agent_response") or "",
-                    conversation_history=record.get("conversation_history") or [],
+                    conversation_history=(record.get("conversation_history") or [])[-40:],
                     total_latency_ms=record.get("latency_ms") or 0,
                     status=record.get("status") or "success",
                     error=record.get("error"),
@@ -210,6 +229,56 @@ class TelemetryStore {
                     self._traces.popitem(last=False);
                 }
             }
+        }
+    }
+
+    # Backfill agent_response for streaming traces from the last LLM call's response.
+    # byllm contract: tool-based agents ALWAYS end with finish_tool(final_output=...).
+    def _backfill_streaming_response(self: TelemetryStore, trace: Trace) -> None {
+        if trace.agent_response != "[streaming]" or not trace.llm_calls {
+            return;
+        }
+        _last = trace.llm_calls[-1].response;
+        if hasattr(_last, "get") {
+            _ch = _last.get("choices", []);
+            if _ch and len(_ch) > 0 {
+                _msg = _ch[0];
+                if hasattr(_msg, "get") {
+                    _msg = _msg.get("message", {});
+                }
+                if hasattr(_msg, "get") {
+                    # Direct text response (no tools used)
+                    if _msg.get("content") {
+                        trace.agent_response = str(_msg.get("content"))[:2000];
+                        # Tool-based: byllm ALWAYS uses finish_tool as last call
+                    } elif _msg.get("tool_calls") {
+                        for _tc in _msg.get("tool_calls", []) {
+                            if _tc?.get
+                            and hasattr(_tc.get("function", {}), "get")
+                            and _tc.get("function", {}).get("name") == "finish_tool" {
+                                _args = _tc.get("function", {}).get("arguments", "");
+                                if hasattr(_args, "strip") {
+                                    try {
+                                        _args = json_module.loads(_args);
+                                    } except (ValueError, TypeError) {
+                                        _ = 0;
+                                    }
+                                }
+                                if hasattr(_args, "get") {
+                                    trace.agent_response = str(
+                                        _args.get("final_output", _args)
+                                    )[:2000];
+                                } else {
+                                    trace.agent_response = str(_args)[:2000];
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        } elif _last {
+            trace.agent_response = str(_last)[:2000];
         }
     }
 
@@ -225,54 +294,8 @@ class TelemetryStore {
         with self._lock {
             all_traces = list(reversed(self._traces.values()));
             # Backfill streaming responses from LLM call data
-            # byllm contract: tool-based agents ALWAYS end with finish_tool(final_output=...)
             for t in all_traces {
-                if t.agent_response == "[streaming]" and t.llm_calls {
-                    _last = t.llm_calls[-1].response;
-                    if hasattr(_last, "get") {
-                        _ch = _last.get("choices", []);
-                        if _ch and len(_ch) > 0 {
-                            _msg = _ch[0];
-                            if hasattr(_msg, "get") {
-                                _msg = _msg.get("message", {});
-                            }
-                            if hasattr(_msg, "get") {
-                                # Direct text response (no tools used)
-                                if _msg.get("content") {
-                                    t.agent_response = str(_msg.get("content"))[:2000];
-                                    # Tool-based: byllm ALWAYS uses finish_tool as last call
-                                } elif _msg.get("tool_calls") {
-                                    for _tc in _msg.get("tool_calls", []) {
-                                        if _tc?.get
-                                        and hasattr(_tc.get("function", {}), "get")
-                                        and _tc.get("function", {}).get("name") == "finish_tool" {
-                                            _args = _tc.get("function", {}).get(
-                                                "arguments", ""
-                                            );
-                                            if hasattr(_args, "strip") {
-                                                try {
-                                                    _args = json_module.loads(_args);
-                                                } except (ValueError, TypeError) {
-                                                    _ = 0;
-                                                }
-                                            }
-                                            if hasattr(_args, "get") {
-                                                t.agent_response = str(
-                                                    _args.get("final_output", _args)
-                                                )[:2000];
-                                            } else {
-                                                t.agent_response = str(_args)[:2000];
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } elif _last {
-                        t.agent_response = str(_last)[:2000];
-                    }
-                }
+                self._backfill_streaming_response(t);
             }
             # Apply filters
             if model {
@@ -311,51 +334,7 @@ class TelemetryStore {
         with self._lock {
             trace = self._traces.get(invocation_id);
             if trace {
-                # Backfill streaming: byllm contract guarantees finish_tool(final_output=...)
-                if trace.agent_response == "[streaming]" and trace.llm_calls {
-                    _last = trace.llm_calls[-1].response;
-                    if hasattr(_last, "get") {
-                        _ch = _last.get("choices", []);
-                        if _ch and len(_ch) > 0 {
-                            _msg = _ch[0];
-                            if hasattr(_msg, "get") {
-                                _msg = _msg.get("message", {});
-                            }
-                            if hasattr(_msg, "get") {
-                                if _msg.get("content") {
-                                    trace.agent_response = str(_msg.get("content"))[:2000];
-                                } elif _msg.get("tool_calls") {
-                                    for _tc in _msg.get("tool_calls", []) {
-                                        if _tc?.get
-                                        and hasattr(_tc.get("function", {}), "get")
-                                        and _tc.get("function", {}).get("name") == "finish_tool" {
-                                            _args = _tc.get("function", {}).get(
-                                                "arguments", ""
-                                            );
-                                            if hasattr(_args, "strip") {
-                                                try {
-                                                    _args = json_module.loads(_args);
-                                                } except (ValueError, TypeError) {
-                                                    _ = 0;
-                                                }
-                                            }
-                                            if hasattr(_args, "get") {
-                                                trace.agent_response = str(
-                                                    _args.get("final_output", _args)
-                                                )[:2000];
-                                            } else {
-                                                trace.agent_response = str(_args)[:2000];
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } elif _last {
-                        trace.agent_response = str(_last)[:2000];
-                    }
-                }
+                self._backfill_streaming_response(trace);
                 return trace.to_dict(include_detail=True);
             }
             return None;

@@ -1,7 +1,9 @@
 """Agent-level telemetry callback implementations."""
 
 impl register_agent_callback(callback: Callable) -> None {
-    _agent_callbacks.append(callback);
+    if callback not in _agent_callbacks {
+        _agent_callbacks.append(callback);
+    }
 }
 
 impl _emit_agent_telemetry(record: dict) -> None {
