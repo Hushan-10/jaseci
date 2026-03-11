@@ -4,6 +4,7 @@ This document provides a summary of new features, improvements, and bug fixes in
 
 ## jac-scale 0.2.5 (Unreleased)
 
+- **Add: LLM Telemetry Admin Dashboard**: Added a `TelemetryStore` backend that subscribes to byllm's agent callback and litellm's per-call logger, grouping all LLM calls within a single agent invocation into one trace (tokens, cost, latency, user prompt, agent response). Traces are served via four new admin REST endpoints (`/admin/llm/telemetry/summary`, `/traces`, `/traces/{id}`, `/filters`) and visualized in the admin UI with a metrics overview page and a paginated, filterable trace detail view.
 - **NGINX Ingress Controller**: Replaced individual NodePort services with a single NGINX Ingress controller. All services are now ClusterIP, accessible via path-based routing through `ingress_node_port` (default: `30080`): `/` app, `/grafana`, `/cache-dashboard/`, `/db-dashboard`.
 - **Fix: Ingress routes now update correctly on re-deploy**: Switched from `patch` to `replace` for Ingress resources so toggling monitoring or dashboards off actually removes the old routes instead of leaving them in place.
 - **Security: RedisInsight always requires authentication**: The `/cache-dashboard` route now always enforces HTTP basic-auth when `redis_dashboard = true`. Credentials are hashed with bcrypt (replaces the previous SHA1 scheme). The auth Secret is also cleaned up automatically when `redis_dashboard` is disabled.
