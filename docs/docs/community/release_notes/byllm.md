@@ -2,12 +2,14 @@
 
 This document provides a summary of new features, improvements, and bug fixes in each version of **byLLM** (formerly MTLLM). For details on changes that might require updates to your existing code, please refer to the [Breaking Changes](../breaking-changes.md) page.
 
-## byllm 0.5.6 (Unreleased)
+## byllm 0.5.7 (Unreleased)
 
 - **Add: LLM Telemetry & Observability**: Introduced a lightweight agent telemetry publish mechanism (`byllm/telemetry.jac`) that emits structured per-invocation records (caller, user prompt, agent response, token usage, cost, and latency) at the end of every `Model.invoke()` call without storing any data in byllm itself.
 - **Add: Invocation ID correlation**: `Model.invoke()` now stamps a UUID `invocation_id` across all LLM calls in a ReAct loop, enabling external consumers (e.g., jac-scale) to correlate per-call litellm events with the top-level agent invocation into a single unified trace.
 
-## byllm 0.5.5 (Latest Release)
+## byllm 0.5.6 (Latest Release)
+
+## byllm 0.5.5
 
 - Small refactors/formatting fixes.
 
