@@ -12,9 +12,6 @@ import jaclang;
 import jaclang.jac0core.unitree as uni;
 import from jaclang.jac0core.helpers { add_line_numbers }
 import from jaclang.jac0core.program { JacProgram }
-import from jaclang.runtimelib.test { parametrize }
-import from tests.fixtures_list { MICRO_JAC_FILES }
-
 glob JAC_ROOT = str(Path(jaclang.__file__).parent.parent),
      FIXTURES = os.path.join(
          JAC_ROOT, "tests", "compiler", "passes", "tool", "fixtures"
@@ -45,14 +42,14 @@ def compare_files(
         );
         if diff {
             print(f"Differences found in comparison:\n{diff}");
-            raise AssertionError("Files differ after formatting.") ;
+            raise AssertionError("Files differ after formatting.");
         }
     } except FileNotFoundError {
         print(f"File not found: {original_file} or {formatted_file}");
-        raise ;
+        raise;
     } except Exception as e {
         print(f"Error comparing files: {e}");
-        raise ;
+        raise;
     }
 }
 
@@ -91,7 +88,7 @@ def micro_suite_test(filename: str, auto_lint: bool = False) {
         if before and after {
             print("\n".join(unified_diff(before.splitlines(), after.splitlines())));
         }
-        raise e ;
+        raise e;
     }
 }
 
@@ -132,7 +129,7 @@ test "fstring comment not injected" {
         if in_fstring and "# Standalone comment" in line {
             raise AssertionError(
                 "Comment was injected inside an f-string:\n" + formatted
-            ) ;
+            );
         }
         if in_fstring and '";' in stripped {
             in_fstring = False;
@@ -240,6 +237,52 @@ test "unicode encoding write roundtrip" {
     }
 }
 
+test "native block comments stay in place" {
+    path = os.path.join(FIXTURES, "native_block_comment.jac");
+    prog = JacProgram.jac_file_formatter(path);
+    formatted = prog.mod.main.gen.jac;
+    lines = formatted.splitlines();
+
+    # Comments must appear between "na {" and its closing "}", not at end of file
+    na_start = next(
+        (
+            i
+            for (i, ln) in enumerate(lines)
+            if ln.strip().startswith("na {")
+        ),
+        None
+    );
+    assert na_start is not None , "na { not found in formatted output";
+    # Find the matching closing brace at the same or lesser indentation
+    na_indent = len(lines[na_start]) - len(lines[na_start].lstrip());
+    na_end: int | None = None;
+    for i in range(len(lines) - 1, na_start, -1) {
+        if lines[i].strip() == "}"
+        and (len(lines[i]) - len(lines[i].lstrip())) <= na_indent {
+            na_end = i;
+            break;
+        }
+    }
+    assert na_end is not None , "closing } for na block not found in formatted output";
+    comment_lines = [
+        i
+        for (i, ln) in enumerate(lines)
+        if "# Comment inside native block" in ln or "# Another comment" in ln
+    ];
+    assert len(comment_lines) == 2 , f"Expected 2 comments, found {len(comment_lines)}";
+    for cl in comment_lines {
+        assert na_start < cl < na_end , (
+            f"Comment at line {cl + 1} is outside the na block "
+            f"(na: {na_start + 1}-{na_end + 1}):\n" + formatted
+        );
+    }
+
+    # Idempotency
+    prog2 = JacProgram.jac_file_formatter(path);
+    formatted2 = prog2.mod.main.gen.jac;
+    assert formatted == formatted2 , "Formatting of na {} block is not idempotent";
+}
+
 """Regression: jac_str_formatter must populate errors_had on syntax error
 so that the LSP returns the original source instead of an empty string."""
 test "syntax error preserves original source" {
@@ -258,16 +301,4 @@ test "syntax error preserves original source" {
         "Formatter must return original source on syntax error, "
         f"got: {repr(result)}"
     );
-}
-
-def format_test(rel_path: str) -> None {
-    filename = os.path.normpath(os.path.join(JAC_ROOT, rel_path));
-    if not os.path.exists(filename) {
-        return;
-    }
-    micro_suite_test(filename);
-}
-
-with entry {
-    parametrize("format", MICRO_JAC_FILES, format_test, id_fn=lambda f : Path(f).stem);
 }

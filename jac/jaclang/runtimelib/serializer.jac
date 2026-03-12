@@ -50,13 +50,14 @@ obj Serializer {
         val: object, include_type: bool, api_mode: bool = False
     ) -> object;
 
-    static def _type_info(obj: object, include: bool) -> dict[str, object];
+    static def _type_info(`obj: object, `include: bool) -> dict[str, object];
     static def _serialize_attrs(
-        obj: object, include_type: bool, api_mode: bool
+        `obj: object, include_type: bool, api_mode: bool
     ) -> dict[str, object];
 
     static def _deserialize_value(val: object) -> object;
     static def _get_class(module_name: str, class_name: str) -> (type | None);
+    static def _id_to_stub(anchor_cls: type, id_str: str) -> (object | None);
     static def _deserialize_anchor(data: dict[str, object]) -> (object | None);
     static def _deserialize_permission(data: object) -> object;
     static def _deserialize_access(data: object) -> object;

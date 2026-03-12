@@ -30,6 +30,8 @@ pip install -e jac
 pip install -e jac-byllm
 pip install -e jac-scale
 pip install -e jac-client
+pip install -e jac-super
+pip install -e jac-mcp
 pip install pre-commit
 pre-commit install
 pip install pytest pytest-xdist pytest-asyncio
@@ -45,7 +47,7 @@ pytest jac -n auto
 **Build something awesome, or fix something that's broken**
 
 See Rules below.
-And check [`.pre-commit-config.yaml`](.pre-commit-config.yaml) to see our lint strategy.
+And check [`.pre-commit-config.yaml`](https://github.com/Jaseci-Labs/jaseci/blob/main/.pre-commit-config.yaml) to see our lint strategy.
 
 **This is how we run the docs.**
 
@@ -120,8 +122,7 @@ Assignees on GitHub issues means the person is **committing to resolve** that is
 The docs site has three tiers with different expectations for contributors:
 
 - **Quick Guide** -- Get a quick experience with Jac. Most features don't need to touch this.
-- **Tutorials** -- How to do things step by step. OK to not touch this for most changes.
-- **Reference** -- Must cover everything. **Every feature or change should update the reference docs.**
+- **Full Reference** -- Must cover everything. **Every feature or change should update the reference docs.**
 
 ## Release Flow (for the empowered)
 

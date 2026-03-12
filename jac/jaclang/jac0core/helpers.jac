@@ -248,23 +248,8 @@ def pretty_print_source_location(
 
 """Jac debugger."""
 class Jdb(pdb.Pdb) {
-    """Initialize the Jac debugger."""
-    def init(self: Jdb, *args: Any, **kwargs: Any) -> None {
-        super.init(*args, **kwargs);
-        self.prompt = 'Jdb > ';
-    }
-
-    """Check for breakpoint."""
-    def has_breakpoint(self: Jdb, bytecode: bytes) -> bool {
-        code = marshal.loads(bytecode);
-        instructions = dis.get_instructions(code);
-        return `any(
-            (
-                (instruction.opname in ('LOAD_GLOBAL', 'LOAD_NAME', 'LOAD_FAST'))
-                and (instruction.argval == 'breakpoint')
-            ) for instruction in instructions
-        );
-    }
+    def init(self: Jdb, *args: Any, **kwargs: Any) -> None;
+    def has_breakpoint(self: Jdb, bytecode: bytes) -> bool;
 }
 
 glob debugger = Jdb();
@@ -284,12 +269,12 @@ def read_file_with_encoding(file_path: str) -> str {
         } except Exception as e {
             raise OSError(
                 f"Could not read file {file_path}: {e}. Report this issue: https://github.com/jaseci-labs/jaseci/issues"
-            ) ;
+            );
         }
     }
     raise OSError(
         f"Could not read file {file_path} with any encoding. Report this issue:https://github.com/jaseci-labs/jaseci/issues"
-    ) ;
+    );
 }
 
 """Return a short, readable type name for annotations."""
@@ -379,22 +364,14 @@ def _describe_nodes_list(objects: Sequence) -> str {
     Used when manually loading entry points to maintain compatibility
     with pluggy's list_plugin_distinfo() interface.
     """
-class DistFacade {
-    def init(self: DistFacade, dist: 'object | None') -> None {
-        self._dist = dist;
-    }
+obj DistFacade {
+    has _dist: (object | None);
 
-    """Get the distribution/package name."""
     @property
-    def project_name(self: DistFacade) -> str {
-        return self._dist.name if (self._dist and self._dist?.name) else 'unknown';
-    }
+    def project_name(self: DistFacade) -> str;
 
-    """Get the distribution version."""
     @property
-    def version(self: DistFacade) -> str {
-        return self._dist.version if (self._dist and self._dist?.version) else '0.0.0';
-    }
+    def version(self: DistFacade) -> str;
 }
 
 """Get list of disabled plugins from JAC_DISABLED_PLUGINS env var or jac.toml.

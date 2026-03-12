@@ -122,7 +122,13 @@ obj AnyType(TypeBase) {
 obj ModuleType(TypeBase) {
     has mod_name: str = "",
         file_uri: Path = Path(""),
-        symbol_table: SymbolTable = None;
+        symbol_table: SymbolTable = None,
+        # Module source flags (similar to Pyright's SourceFileInfo)
+        # These are computed once when the module is loaded based on file path.
+        is_stub_file: bool = False,  # True if .pyi file
+        is_stdlib_stub: bool = False,  # True if from vendor/typeshed/stdlib/
+        is_typing_stub: bool = False,  # True if typing.pyi or typing_extensions.pyi
+        is_builtin_stub: bool = False;  # True if builtins.pyi, abc.pyi, etc.
 
     with entry {
         CATEGORY: ClassVar[TypeCategory] = TypeCategory.Module;
@@ -133,6 +139,11 @@ obj ModuleType(TypeBase) {
 
 """Represents a type variable."""
 obj TypeVarType(TypeBase) {
+    has name: str = "",
+        is_covariant: bool = False,
+        is_contravariant: bool = False,
+        bound: (TypeBase | None) = None;
+
     with entry {
         CATEGORY: ClassVar[TypeCategory] = TypeCategory.TypeVar;
     }
@@ -163,7 +174,9 @@ Holds the shared details of class type.
             type_params: (list[TypeVarType] | None) = None,
             base_classes: (list[TypeBase] | None) = None,
             is_builtin_class: bool = False,
+            is_from_stdlib_stub: bool = False,  # True if from vendor/typeshed/stdlib/
             is_data_class: bool = False,
+            is_namedtuple: bool = False,
             is_root_class: bool = False,
             is_enum_class: bool = False,
             enum_value_type: (TypeBase | None) = None,
@@ -183,7 +196,11 @@ Holds the private details of class type.
             # Similar to Pyright's classType.priv.aliasName.
             # This is set when loading special forms from typing module
             # to distinguish between different _SpecialForm instances.
-            alias_name: (str | None) = None;
+            alias_name: (str | None) = None,
+            # Literal value for Literal types (e.g., Literal["hello"], Literal[42]).
+            # Similar to Pyright's classType.priv.literalValue.
+            # When set, this ClassType represents a literal type like Literal["x"].
+            literal_value: (str | int | bool | None) = None;
 
         def postinit -> None;
     }
@@ -200,11 +217,16 @@ Holds the private details of class type.
 
     def is_builtin(class_name: (str | None) = None) -> bool;
     def is_data_class -> bool;
+    def is_namedtuple -> bool;
     def is_enum_class -> bool;
     def is_edge_type -> bool;
     def is_node_type -> bool;
     # Check if this is a special form with the given alias name (like Pyright's isSpecialBuiltIn)
     def is_special_form(name: (str | None) = None) -> bool;
+    # Literal type support (similar to Pyright's literalValue handling)
+    def clone_with_literal(value: (str | int | bool | None)) -> ClassType;
+    def is_literal_type -> bool;
+    def get_literal_value -> (str | int | bool | None);
 }
 
 """Enumeration of parameter kinds."""
@@ -271,11 +293,7 @@ obj FunctionType(TypeBase) {
     def __str__ -> str;
     def specialize(class_type: ClassType) -> FunctionType;
     def _index_of_type_param(class_type: ClassType, type_var: TypeVarType) -> int;
-    # --- Flag checking methods (following Pyright's pattern) ---
-    """Check if this is a gradual callable form (Callable[..., T])."""
     def is_gradual_callable_form -> bool;
-
-    """Check if this function type was created from a Callable annotation."""
     def is_from_callable_annotation -> bool;
 }
 

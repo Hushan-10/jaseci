@@ -1,6 +1,8 @@
 # CLI Reference
 
-The Jac CLI provides commands for running, building, testing, and deploying Jac applications.
+The `jac` command is your primary interface for working with Jac projects. It handles the full development lifecycle: running programs (`jac run`), type-checking code (`jac check`), running tests (`jac test`), formatting and linting (`jac format`, `jac lint`), managing dependencies (`jac add`, `jac install`), serving APIs (`jac start`), and even compiling to native binaries (`jac nacompile`). Think of it as combining the roles of `python`, `pip`, `pytest`, `black`, and `flask` into a single unified tool.
+
+The CLI is extensible through plugins. When you install plugins like `jac-scale` or `jac-client`, they add new commands and flags automatically -- for example, `jac start --scale` for Kubernetes deployment or `jac build --client desktop` for desktop app packaging.
 
 > **💡 Enhanced Output**: For beautiful, colorful terminal output with Rich formatting, install the optional `jac-super` plugin: `pip install jac-super`. All CLI commands will automatically use enhanced output with themes, panels, and spinners.
 
@@ -14,6 +16,7 @@ The Jac CLI provides commands for running, building, testing, and deploying Jac 
 | `jac check` | Type check code |
 | `jac test` | Run tests |
 | `jac format` | Format code |
+| `jac lint` | Lint code (use `--fix` to auto-fix) |
 | `jac clean` | Clean project build artifacts |
 | `jac purge` | Purge global bytecode cache (works even if corrupted) |
 | `jac enter` | Run specific entrypoint |
@@ -22,6 +25,7 @@ The Jac CLI provides commands for running, building, testing, and deploying Jac 
 | `jac plugins` | Manage plugins |
 | `jac config` | Manage project configuration |
 | `jac destroy` | Remove Kubernetes deployment (jac-scale) |
+| `jac status` | Show deployment status of Kubernetes resources (jac-scale) |
 | `jac add` | Add packages to project |
 | `jac install` | Install project dependencies |
 | `jac remove` | Remove packages from project |
@@ -51,15 +55,14 @@ Displays the Jac version, Python version, platform, and all detected plugins wit
  _
 (_) __ _  ___     Jac Language
 | |/ _` |/ __|
-| | (_| | (__     Version:  0.10.2
+| | (_| | (__     Version:  0.11.1
 _/ |\__,_|\___|    Python 3.12.3
 |__/                Platform: Linux x86_64
 
 🔌 Plugins Detected:
-   byllm==0.4.17
-   jac-client==0.2.13
-   jac-scale==0.1.4
-   jac-super==0.1.0
+   byllm==0.4.15
+   jac-client==0.2.11
+   jac-scale==0.2.1
 ```
 
 ---
@@ -146,7 +149,7 @@ jac run greet.jac --name Alice
 Start a Jac application as an HTTP API server. With the jac-scale plugin installed, use `--scale` to deploy to Kubernetes. Use `--dev` for Hot Module Replacement (HMR) during development.
 
 ```bash
-jac start [-h] [-p PORT] [-m] [--no-main] [-f] [--no-faux] [-d] [--no-dev] [-a API_PORT] [-n] [--no-no_client] [--scale] [--no-scale] [-b] [--no-build] [filename]
+jac start [-h] [-p PORT] [-m] [--no-main] [-f] [--no-faux] [-d] [--no-dev] [-a API_PORT] [-n] [--no-no_client] [--profile PROFILE] [--client {web,desktop,pwa}] [--scale] [--no-scale] [-b] [--no-build] [filename]
 ```
 
 | Option | Description | Default |
@@ -158,6 +161,8 @@ jac start [-h] [-p PORT] [-m] [--no-main] [-f] [--no-faux] [-d] [--no-dev] [-a A
 | `-d, --dev` | Enable HMR (Hot Module Replacement) mode | `False` |
 | `--api_port` | Separate API port for HMR mode (0=same as port) | `0` |
 | `--no_client` | Skip client bundling/serving (API only) | `False` |
+| `--profile` | Configuration profile to load (e.g. prod, staging) | `""` |
+| `--client` | Client build target (`web`, `desktop`, `pwa`) | None |
 | `--scale` | Deploy to Kubernetes (requires jac-scale) | `False` |
 | `-b, --build` | Build Docker image before deploy (with `--scale`) | `False` |
 
@@ -174,7 +179,7 @@ jac start -p 3000
 jac start --dev
 
 # HMR mode without client bundling (API only)
-jac start --dev --no-client
+jac start --dev --no_client
 
 # Deploy to Kubernetes (requires jac-scale plugin)
 jac start --scale
@@ -242,15 +247,14 @@ jac create
 Type check Jac code for errors.
 
 ```bash
-jac check [-h] [-e] [-w] [--ignore PATTERNS] [-p] [--nowarn] paths [paths ...]
+jac check [-h] [-e] [-i [IGNORE ...]] [-p] [--nowarn] paths [paths ...]
 ```
 
 | Option | Description | Default |
 |--------|-------------|---------|
 | `paths` | Files/directories to check | Required |
 | `-e, --print_errs` | Print detailed error messages | `True` |
-| `-w, --warnonly` | Treat errors as warnings | `False` |
-| `--ignore` | Comma-separated list of files/folders to ignore | None |
+| `-i, --ignore` | Space-separated list of files/folders to ignore | None |
 | `-p, --parse_only` | Only check syntax (skip type checking) | `False` |
 | `--nowarn` | Suppress warning output | `False` |
 
@@ -262,9 +266,6 @@ jac check main.jac
 
 # Check a directory
 jac check src/
-
-# Warnings only mode
-jac check main.jac -w
 
 # Check directory excluding specific folders/files
 jac check myproject/ --ignore fixtures tests
@@ -656,6 +657,64 @@ Deploy to Kubernetes using the jac-scale plugin. See the [`jac start`](#jac-star
 ```bash
 jac start --scale           # Deploy without building
 jac start --scale --build   # Build and deploy
+```
+
+---
+
+### jac status
+
+Show the deployment status of your Jac application on Kubernetes. Displays a color-coded table with the health of each component (application, Redis, MongoDB, Prometheus, Grafana), pod readiness counts, and service URLs.
+
+```bash
+jac status [-h] file_path [--target TARGET]
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `file_path` | Path to the `.jac` file | Required |
+| `--target` | Deployment target platform | `kubernetes` |
+
+**Example output:**
+
+```
+  Jac Scale - Deployment Status
+  App: my-app   Namespace: default
+
+┌───────────────────┬────────────────────────┬───────┐
+│ Component         │ Status                 │ Pods  │
+├───────────────────┼────────────────────────┼───────┤
+│ Jaseci App        │ ● Running              │  1/1  │
+│ Redis             │ ● Running              │  1/1  │
+│ MongoDB           │ ● Running              │  1/1  │
+│ Prometheus        │ ● Running              │  1/1  │
+│ Grafana           │ ● Running              │  1/1  │
+└───────────────────┴────────────────────────┴───────┘
+
+  Service URLs
+  ────────────────────────────────────────────
+  Application:  http://localhost:30001
+  Grafana:      http://localhost:30003
+```
+
+**Status indicators:**
+
+| Symbol | Meaning |
+|--------|---------|
+| `● Running` | All pods healthy and ready |
+| `◑ Degraded` | Some pods ready, but not all |
+| `⟳ Pending` | Pods are starting up |
+| `↺ Restarting` | Pods are crash-looping |
+| `✗ Failed` | Component has failed |
+| `○ Not Deployed` | Component is not present in the cluster |
+
+**Examples:**
+
+```bash
+# Check deployment status
+jac status app.jac
+
+# Check status with explicit target
+jac status app.jac --target kubernetes
 ```
 
 ---
@@ -1104,6 +1163,45 @@ jac tool ir py main.jac
 
 ---
 
+### jac nacompile
+
+Compile a `.na.jac` file to a standalone native ELF executable. No external compiler, assembler, or linker is required. The entire pipeline runs in pure Python using llvmlite and a built-in ELF linker.
+
+```bash
+jac nacompile filename [-o OUTPUT]
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `filename` | Path to the `.na.jac` file (must have `with entry {}` block) | *required* |
+| `-o, --output` | Output binary path | filename without `.na.jac` |
+
+The file must contain a `with entry { }` block (which defines the `jac_entry()` function). Files with Python/server dependencies (`native_imports`) cannot be compiled to standalone binaries.
+
+**What happens under the hood:**
+
+1. Compiles the `.na.jac` through the Jac pipeline to get LLVM IR
+2. Injects `main()` and `_start` as pure LLVM IR (zero inline assembly)
+3. Emits native object code via llvmlite's `emit_object()`
+4. Links into an ELF executable via the built-in pure-Python ELF linker
+
+The resulting binary dynamically links against `libc.so.6`. Memory management uses a self-contained reference counting scheme -- no external garbage collector (libgc) is required.
+
+**Examples:**
+
+```bash
+# Compile to ./chess
+jac nacompile chess.na.jac
+
+# Compile with custom output name
+jac nacompile chess.na.jac -o mychess
+
+# Run the binary
+./mychess
+```
+
+---
+
 ### jac completions
 
 Generate and install shell completion scripts for the `jac` CLI.
@@ -1246,6 +1344,9 @@ jac start -p 8000
 
 # Deploy to Kubernetes
 jac start main.jac --scale
+
+# Check deployment status
+jac status main.jac
 
 # Remove deployment
 jac destroy main.jac

@@ -25,6 +25,8 @@ impl TypeEvaluator.get_type_of_module_item(node_: uni.ModuleItem) -> types.TypeB
             for ext in (".jac", ".py", ".pyi", ".js", ".ts", ".jsx", ".tsx") {
                 candidate_paths = [
                     (mod_dir / f"{node_.name.value}{ext}").resolve(),
+                    # Check for subpackage: e.g., llvmlite/ir/__init__.py
+                    (mod_dir / node_.name.value / f"__init__{ext}").resolve(),
                     (mod_dir / f"__init__{ext}").resolve(),
 
                 ];
@@ -35,7 +37,19 @@ impl TypeEvaluator.get_type_of_module_item(node_: uni.ModuleItem) -> types.TypeB
                     }
                     mod = self._import_module_from_path(str(path));
 
-                    if path.name.startswith("__init__") {
+                    # Check if this is a subpackage's __init__ file (e.g., subpkg/__init__.py)
+                    # vs the parent module's __init__ file
+                    is_subpackage_init = (
+                        path.name.startswith("__init__")
+                        and path.parent.name == node_.name.value
+                    );
+                    is_parent_init = (
+                        path.name.startswith("__init__")
+                        and path.parent.name != node_.name.value
+                    );
+
+                    if is_parent_init {
+                        # Look up the symbol in the parent's __init__.py
                         if sym := type_utils.lookup_symtab(
                             mod, node_.name.value, self.builtins_module
                         ) {
@@ -43,8 +57,17 @@ impl TypeEvaluator.get_type_of_module_item(node_: uni.ModuleItem) -> types.TypeB
                         }
                         continue;
                     }
+
+                    # For regular modules and subpackage __init__.py, create ModuleType
+                    flags = type_utils.compute_module_source_flags(str(path));
                     mod_type = types.ModuleType(
-                        mod_name=node_.name.sym_name, file_uri=path, symbol_table=mod,
+                        mod_name=node_.name.sym_name,
+                        file_uri=path,
+                        symbol_table=mod,
+                        is_stub_file=flags.is_stub_file,
+                        is_stdlib_stub=flags.is_stdlib_stub,
+                        is_typing_stub=flags.is_typing_stub,
+                        is_builtin_stub=flags.is_builtin_stub,
                     );
 
                     node_.name.type = mod_type;
@@ -96,10 +119,15 @@ impl TypeEvaluator.get_type_of_module(node_: uni.ModulePath) -> types.TypeBase {
                 continue;
             }
             mod: uni.Module = self._import_module_from_path(mod_path);
+            flags = type_utils.compute_module_source_flags(mod_path);
             mod_type = types.ModuleType(
                 mod_name=npath.value,
                 file_uri=Path(mod_path).resolve(),
-                symbol_table=mod
+                symbol_table=mod,
+                is_stub_file=flags.is_stub_file,
+                is_stdlib_stub=flags.is_stdlib_stub,
+                is_typing_stub=flags.is_typing_stub,
+                is_builtin_stub=flags.is_builtin_stub,
             );
             npath.type = mod_type;
             npath._sym_category = SymbolType.MODULE;
@@ -124,15 +152,74 @@ impl TypeEvaluator._import_module_from_path(path: str) -> uni.Module {
     if resolved_path in self.program.mod.hub {
         mod = self.program.mod.hub[resolved_path];
     } else {
-        mod = self.program.compile(
-            path, no_cgen=True, type_check=False, symtab_ir_only=True
-        );
-        if mod.parent_scope is None and mod is not self.builtins_module {
-            mod.parent_scope = self.builtins_module;
+        # Try JIR cache first for .jac files
+        jir_mod: (uni.Module | None) = None;
+        if resolved_path.endswith('.jac') {
+            jir_mod = self._try_read_jir_cache(resolved_path);
         }
-        self.program.mod.hub[resolved_path] = mod;
+        if jir_mod is not None {
+            mod = jir_mod;
+            if mod.parent_scope is None and mod is not self.builtins_module {
+                mod.parent_scope = self.builtins_module;
+            }
+            self.program.mod.hub[resolved_path] = mod;
+        } else {
+            # Cache miss — full compile
+            mod = self.program.compile(
+                path, no_cgen=True, type_check=False, symtab_ir_only=True
+            );
+            if mod.parent_scope is None and mod is not self.builtins_module {
+                mod.parent_scope = self.builtins_module;
+            }
+            self.program.mod.hub[resolved_path] = mod;
+            # Write JIR module cache for .jac files (best-effort).
+            if resolved_path.endswith('.jac') {
+                try {
+                    import from jaclang.jac0core.jir {
+                        get_module_cache_path,
+                        SEC_BYTECODE
+                    }
+                    import from jaclang.jac0core.jir_passes { JirWriter }
+                    cache_path = get_module_cache_path(resolved_path);
+                    cache_path.parent.mkdir(parents=True, exist_ok=True);
+                    writer = JirWriter();
+                    sections: (dict[int, bytes] | None) = None;
+                    bc = getattr(mod.gen, 'py_bytecode', None);
+                    if bc is not None {
+                        sections = {SEC_BYTECODE: bc};
+                    }
+                    jir_bytes = writer.write_module(mod, sections=sections);
+                    tmp_path = cache_path.with_suffix('.tmp');
+                    tmp_path.write_bytes(jir_bytes);
+                    tmp_path.rename(cache_path);
+                } except Exception {
+                    ;
+                }
+            }
+        }
     }
     return mod;
+}
+
+"""Try to read a compiled .jac module from the JIR cache. Returns None on any failure."""
+impl TypeEvaluator._try_read_jir_cache(resolved_path: str) -> (uni.Module | None) {
+    import from jaclang.jac0core.jir { get_module_cache_path, is_module_cache_valid }
+    import from jaclang.jac0core.jir_passes { JirReader }
+    import traceback;
+    try {
+        cache_path = get_module_cache_path(resolved_path);
+        if not is_module_cache_valid(resolved_path, cache_path) {
+            return None;
+        }
+        data = cache_path.read_bytes();
+        reader = JirReader(_source_path=resolved_path);
+        mod = reader.read_module(data);
+        return mod;
+    } except Exception {
+        # Log but don't crash — fall back to full compile
+        traceback.print_exc();
+        return None;
+    }
 }
 
 """Return the effective type of the symbol."""

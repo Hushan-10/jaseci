@@ -37,7 +37,48 @@ glob BINARY_OPERATOR_MAP: dict[str, tuple[str, str]] = {
          Tok.GT: ('__gt__', '__lt__'),
          Tok.GTE: ('__ge__', '__le__')
      },
-     ARITHMETIC_OPERATORS: set[str] = {Tok.PLUS,Tok.MINUS,Tok.STAR_MUL,Tok.DIV,Tok.FLOOR_DIV,Tok.MOD,Tok.STAR_POW};
+     ARITHMETIC_OPERATORS: set[str] = {Tok.PLUS,Tok.MINUS,Tok.STAR_MUL,Tok.DIV,Tok.FLOOR_DIV,Tok.MOD,Tok.STAR_POW},
+     INT_LIKE_WIDTHS: dict[str, int] = {
+         "i8": 8,
+         "u8": 8,
+         "i16": 16,
+         "u16": 16,
+         "i32": 32,
+         "u32": 32,
+         "i64": 64,
+         "u64": 64
+     },
+     FLOAT_LIKE_NAMES: set[str] = {"f32","f64"},
+     AUG_OPERATOR_MAP: dict[str, str] = {
+         Tok.ADD_EQ: '__iadd__',
+         Tok.SUB_EQ: '__isub__',
+         Tok.MUL_EQ: '__imul__',
+         Tok.DIV_EQ: '__itruediv__',
+         Tok.FLOOR_DIV_EQ: '__ifloordiv__',
+         Tok.MOD_EQ: '__imod__',
+         Tok.STAR_POW_EQ: '__ipow__',
+         Tok.LSHIFT_EQ: '__ilshift__',
+         Tok.RSHIFT_EQ: '__irshift__',
+         Tok.BW_AND_EQ: '__iand__',
+         Tok.BW_OR_EQ: '__ior__',
+         Tok.BW_XOR_EQ: '__ixor__',
+         Tok.MATMUL_EQ: '__imatmul__'
+     },
+     AUG_TO_BINARY_MAP: dict[str, str] = {
+         Tok.ADD_EQ: Tok.PLUS,
+         Tok.SUB_EQ: Tok.MINUS,
+         Tok.MUL_EQ: Tok.STAR_MUL,
+         Tok.DIV_EQ: Tok.DIV,
+         Tok.FLOOR_DIV_EQ: Tok.FLOOR_DIV,
+         Tok.MOD_EQ: Tok.MOD,
+         Tok.STAR_POW_EQ: Tok.STAR_POW,
+         Tok.LSHIFT_EQ: Tok.LSHIFT,
+         Tok.RSHIFT_EQ: Tok.RSHIFT,
+         Tok.BW_AND_EQ: Tok.BW_AND,
+         Tok.BW_OR_EQ: Tok.BW_OR,
+         Tok.BW_XOR_EQ: Tok.BW_XOR,
+         Tok.MATMUL_EQ: Tok.DECOR_OP
+     };
 
 """
 Apply numeric type promotion for arithmetic operations.
@@ -47,24 +88,38 @@ Rules:
 - int op float -> float
 - float op int -> float
 - float op float -> float
+- Fixed-width int op fixed-width int -> wider of the two
+- Fixed-width int op int -> int (int is the widest)
+- Any int-like op any float-like -> float
+- f32 op f64 -> float (f64 / float)
+- Division with any numeric -> float
 
 Returns the promoted result type, or None if types are not numeric.
 """
+def _is_int_like(t: jtypes.ClassType) -> bool {
+    return t.is_builtin("int")
+    or (t.is_builtin() and t.shared.class_name in INT_LIKE_WIDTHS);
+}
+
+def _is_float_like(t: jtypes.ClassType) -> bool {
+    return t.is_builtin("float")
+    or (t.is_builtin() and t.shared.class_name in FLOAT_LIKE_NAMES);
+}
+
 def get_numeric_promotion_type(
     evaluator: 'TypeEvaluator',
     left_type: jtypes.TypeBase,
     right_type: jtypes.TypeBase,
     op: str
 ) -> jtypes.TypeBase | None {
-    # Check if both types are numeric (int or float)
     if not isinstance(left_type, jtypes.ClassType)
     or not isinstance(right_type, jtypes.ClassType) {
         return None;
     }
-    left_is_int = left_type.is_builtin("int");
-    left_is_float = left_type.is_builtin("float");
-    right_is_int = right_type.is_builtin("int");
-    right_is_float = right_type.is_builtin("float");
+    left_is_int = _is_int_like(left_type);
+    left_is_float = _is_float_like(left_type);
+    right_is_int = _is_int_like(right_type);
+    right_is_float = _is_float_like(right_type);
 
     # Both must be numeric
     if not ((left_is_int or left_is_float) and (right_is_int or right_is_float)) {
@@ -76,13 +131,27 @@ def get_numeric_promotion_type(
         return evaluator._convert_to_instance(evaluator.prefetch.float_class);
     }
 
-    # If either operand is float, result is float (int promoted to float)
+    # If either operand is float-like, result is float
     if left_is_float or right_is_float {
         return evaluator._convert_to_instance(evaluator.prefetch.float_class);
     }
 
-    # Both are int, result is int
-    return evaluator._convert_to_instance(evaluator.prefetch.int_class);
+    # Both are int-like: promote to the wider type
+    left_name = left_type.shared.class_name;
+    right_name = right_type.shared.class_name;
+    left_fw = left_name in INT_LIKE_WIDTHS;
+    right_fw = right_name in INT_LIKE_WIDTHS;
+
+    # If either is plain int, result is int (int is the widest integer)
+    if not left_fw or not right_fw {
+        return evaluator._convert_to_instance(evaluator.prefetch.int_class);
+    }
+
+    # Both are fixed-width: pick the wider one
+    if INT_LIKE_WIDTHS[left_name] >= INT_LIKE_WIDTHS[right_name] {
+        return evaluator._convert_to_instance(left_type);
+    }
+    return evaluator._convert_to_instance(right_type);
 }
 
 """Return the binary operator's jtype."""
@@ -91,6 +160,63 @@ def get_type_of_binary_operation(
 ) -> jtypes.TypeBase {
     left_type = evaluator.get_type_of_expression(expr.left);
     right_type = evaluator.get_type_of_expression(expr.right);
+
+    # TypeVar binary operation handling (Pyright: typeVar5/6)
+    # Check BEFORE is_any_type since TypeVar.is_any_type() returns True
+    # EXCEPT for | operator which is used for union types (T | int)
+    if isinstance(expr.op, uni.Token)
+    and expr.op.name in BINARY_OPERATOR_MAP
+    and expr.op.name != Tok.BW_OR {
+        if isinstance(left_type, jtypes.TypeVarType) {
+            if left_type.bound and isinstance(left_type.bound, jtypes.ClassType) {
+                # Bounded TypeVar - use bound type for magic method lookup
+                (magic, rmagic) = BINARY_OPERATOR_MAP[expr.op.name];
+                result = evaluator.get_type_of_magic_method_call(
+                    left_type.bound, magic, [expr.right], None
+                );
+                if result {
+                    return result;
+                }
+                # Bound type doesn't support this operator
+                evaluator.add_diagnostic(
+                    expr,
+                    f'Operator "{magic}" not supported for type "{left_type.bound}"'
+                );
+                return jtypes.UnknownType();
+            }
+            # Unbounded TypeVar
+            (magic, _) = BINARY_OPERATOR_MAP[expr.op.name];
+            evaluator.add_diagnostic(
+                expr, f'Operator "{magic}" not supported for type "{left_type.name}"'
+            );
+            return jtypes.UnknownType();
+        }
+        if isinstance(right_type, jtypes.TypeVarType) {
+            if right_type.bound and isinstance(right_type.bound, jtypes.ClassType) {
+                # Bounded TypeVar - use bound type for magic method lookup
+                (magic, rmagic) = BINARY_OPERATOR_MAP[expr.op.name];
+                result = evaluator.get_type_of_magic_method_call(
+                    right_type.bound, rmagic, [expr.left], None
+                );
+                if result {
+                    return result;
+                }
+                # Bound type doesn't support this operator
+                evaluator.add_diagnostic(
+                    expr,
+                    f'Operator "{rmagic}" not supported for type "{right_type.bound}"'
+                );
+                return jtypes.UnknownType();
+            }
+            # Unbounded TypeVar
+            (_, rmagic) = BINARY_OPERATOR_MAP[expr.op.name];
+            evaluator.add_diagnostic(
+                expr, f'Operator "{rmagic}" not supported for type "{right_type.name}"'
+            );
+            return jtypes.UnknownType();
+        }
+    }
+
     if left_type.is_any_type() or right_type.is_any_type() {
         return jtypes.UnknownType();
     }
@@ -99,7 +225,7 @@ def get_type_of_binary_operation(
         (expr.op in (Tok.KW_IS, Tok.KW_ISN, Tok.KW_IN, Tok.KW_NIN))
         and (evaluator.prefetch.bool_class is not None)
     ) {
-        evaluator._convert_to_instance(evaluator.prefetch.bool_class);
+        return evaluator._convert_to_instance(evaluator.prefetch.bool_class);
     }
 
     # Magic method lookup for other binary operations
@@ -284,3 +410,9 @@ def get_type_of_binary_operation(
     return jtypes.UnknownType();
 }
 # Arithmetic operators that support numeric type promotion (int -> float)
+
+# Fixed-width integer type names and their bit widths for promotion
+
+# Maps augmented assignment operator tokens to in-place magic methods
+
+# Maps augmented op tokens to their base binary op tokens

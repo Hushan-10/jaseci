@@ -1,6 +1,8 @@
 # React-Style Components
 
-Build reusable UI components with JSX syntax.
+Jac's client-side code uses JSX syntax (the same HTML-in-code approach popularized by React) to build UI components. Components are functions declared inside `cl { }` blocks that return `JsxElement` values. They support props for data passing, composition for building complex UIs from simple parts, and all the familiar React patterns -- conditional rendering, list mapping, and event handling.
+
+The key difference from a standard React setup: there's no separate JavaScript project, no webpack configuration, and no build toolchain to manage. You write components in Jac syntax, the compiler generates optimized JavaScript, and the dev server bundles and serves it automatically.
 
 > **Prerequisites**
 >
@@ -384,7 +386,7 @@ cl {
 | Expression | `{expression}` |
 | Event handler | `onClick={lambda -> None { ... }}` |
 | List rendering | `{[<li>{x}</li> for x in items]}` |
-| Conditional | `{condition ? <A /> : <B />}` |
+| Conditional | `{("A" if condition else "B")}` |
 | Children | `{props.children}` |
 | Import component | `import from "./File.cl.jac" { Component }` |
 

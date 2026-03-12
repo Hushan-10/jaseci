@@ -1,6 +1,61 @@
 """Core auth, user management, JWT, API keys, server start/postinit implementations."""
+import socket;
+
+"""Find an available port starting from the given port.
+
+Returns the first available port, or raises OSError if none found within max_retries.
+"""
+impl _find_available_port(start_port: int, max_retries: int = PORT_RETRY_LIMIT) -> int {
+    current_port = start_port;
+    for _ in range(max_retries) {
+        try {
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s {
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1);
+                s.bind(('0.0.0.0', current_port));
+            }
+            return current_port;
+        } except OSError as e {
+            if e.errno in (ERRNO_ADDR_IN_USE_LINUX, ERRNO_ADDR_IN_USE_WINDOWS)
+            or "Address already in use" in str(e) {
+                current_port += 1;
+            } else {
+                raise;
+            }
+        }
+    }
+    raise OSError(
+        f"Could not find an available port after trying {start_port}-{current_port}"
+    );
+}
+
+"""Get local network IP addresses (non-localhost)."""
+impl _get_network_ips -> list[str] {
+    ips: list[str] = [];
+    try {
+        hostname = socket.gethostname();
+        for addr in socket.getaddrinfo(hostname, None) {
+            ip = addr[4][0];
+            # Filter out localhost and IPv6
+            if not ip.startswith('127.') and ':' not in ip {
+                if ip not in ips {
+                    ips.append(ip);
+                }
+            }
+        }
+    } except Exception {
+    # Silently ignore network interface errors
+    }
+    return ips;
+}
+
 impl JacAPIServerCore.postinit -> None {
     super.postinit();
+    # Support test mode (port=0): base postinit sets self.server = None,
+    # but jac-scale needs a JFastApiServer for middleware/endpoint registration.
+    if self.server is None {
+        import from jac_scale.jserver.jfast_api { JFastApiServer }
+        self.server = JFastApiServer();
+    }
     self._api_key_manager = ApiKeyManager();
     self.server.app.add_middleware(
         CORSMiddleware,
@@ -72,34 +127,37 @@ impl JacAPIServerCore.postinit -> None {
                     metrics_collector.record_request(
                         request.method, request.url.path, 500, duration
                     );
-                    raise ;
+                    raise;
                 } finally {
                     metrics_collector.request_finished();
                 }
             }
         }
         self.server.app.add_middleware(MetricsMiddleware);
-        # Register /metrics endpoint
+        # Register /metrics endpoint (admin-only)
+        metrics_handler = self._create_admin_metrics_handler(
+            self._metrics.get_endpoint_handler()
+        );
         self.server.add_endpoint(
             JEndPoint(
                 method=HTTPMethod.GET,
                 path=metrics_endpoint,
-                callback=self._metrics.get_endpoint_handler(),
+                callback=metrics_handler,
                 parameters=[],
                 response_model=None,
                 tags=['Monitoring'],
-                summary='Prometheus metrics',
-                description='Exposes application metrics in Prometheus format for scraping'
+                summary='Prometheus metrics (Admin only)',
+                description='Exposes application metrics in Prometheus format for scraping. Requires admin authentication.'
             )
         );
-        logger.info(f"Prometheus metrics enabled at {metrics_endpoint}");
+        logger.info(f"Prometheus metrics enabled at {metrics_endpoint} (admin-only)");
     }
 }
 
 impl JacAPIServerCore.start(
     dev: bool = False,
     no_client: bool = False,
-    on_ready: Callable[[], None] | None = None
+    on_ready: Callable[..., None] | None = None
 ) -> None {
     self.introspector.load();
     # Eagerly build client bundle if there are client exports (skip in dev, no_client, or PWA mode)
@@ -178,12 +236,49 @@ impl JacAPIServerCore.start(
     }
     self.register_root_asset_endpoint();
     self._configure_openapi_security();
-    self.user_manager.create_user('__guest__', '__no_password__');
-    # Call the ready callback (e.g., to print startup banner)
+    self.user_manager.create_user(Con.GUEST.value, '__no_password__');
+    self._setup_scheduler();
+    # Find an available port (may differ from requested if port is in use)
+    original_port = self.port;
+    self.port = _find_available_port(self.port);
+    if self.port != original_port {
+        console.print(
+            f"  Port {original_port} is in use, using port {self.port} instead",
+            style="warning"
+        );
+    }
+    # Print startup banner with correct port
+    self._print_startup_banner(dev, no_client);
+    # Call the ready callback with the actual port (e.g., to print startup banner)
     if on_ready {
-        on_ready();
+        on_ready(self.port);
     }
     self.server.run_server(port=self.port);
+}
+
+"""Print startup banner with correct port."""
+impl JacAPIServerCore._print_startup_banner(dev: bool, no_client: bool) -> None {
+    import from importlib.metadata { version as pkg_version }
+
+    # Print header
+    try {
+        version = pkg_version('jaclang');
+        console.print(f"\n  JAC DEV SERVER v{version}\n", style="bold cyan");
+    } except Exception {
+        console.print(f"\n  JAC DEV SERVER\n", style="bold cyan");
+    }
+
+    # Build URLs list (consistent with existing _print_startup_message pattern)
+    urls: list[tuple[str, str]] = [];
+    urls.append(("Local", f"http://localhost:{self.port}/"));
+    for ip in _get_network_ips() {
+        urls.append(("Network", f"http://{ip}:{self.port}/"));
+    }
+
+    # Print URLs with arrows (uses console.print_urls for consistency)
+    console.print_urls(urls);
+    console.print();
+    console.print("  🚀 Server ready", style="bold green");
 }
 
 """Configure OpenAPI security scheme to only apply to walker endpoints that require auth."""
@@ -891,4 +986,56 @@ impl JacAPIServerCore.register_api_key_endpoints -> None {
             description='Revokes an API key, making it invalid for future webhook requests.'
         )
     );
+}
+
+"""Create the __system__ user, initialise JacScaleScheduler, and register /jobs endpoints."""
+impl JacAPIServerCore._setup_scheduler -> None {
+    scheduler_config = get_scale_config().get_scheduler_config();
+    system_password = scheduler_config.get('system_user_password', 'system_secret');
+    try {
+        self.user_manager.create_user('__system__', system_password);
+    } except Exception { }
+    system_token = self.user_manager.create_jwt_token('__system__');
+
+    # Initialise JacScaleScheduler singleton
+    jac_scheduler = JacScaleScheduler.instance();
+    jac_scheduler.setup(system_token=system_token or '', server=self);
+
+    # Register static tasks (walkers/functions with STATIC trigger)
+    jac_scheduler.register_static_tasks(self.get_walkers(), self.get_functions(), self);
+
+    # Reload persisted dynamic jobs from DB
+    jac_scheduler.register_dynamic_tasks_from_db();
+
+    # Start APScheduler background thread
+    jac_scheduler.start();
+
+    # Register /jobs REST endpoints
+    self.register_scheduler_endpoints();
+}
+
+"""Create a wrapper around the metrics endpoint that requires admin authentication."""
+impl JacAPIServerCore._create_admin_metrics_handler(
+    original_handler: Callable[..., Any]
+) -> Callable[..., Any] {
+    import from fastapi { Request }
+    import from fastapi.responses { Response, JSONResponse }
+    import from jaclang.runtimelib.transport { TransportResponse, Meta }
+
+    async def admin_metrics_handler(request: Request) -> Response {
+        authorization = request.headers.get('Authorization');
+        admin_user = self.validate_admin_token(authorization);
+        if not admin_user {
+            return JSONResponse(
+                status_code=403,
+                content=TransportResponse.fail(
+                    code='FORBIDDEN',
+                    message='Admin access required',
+                    meta=Meta(extra={'http_status': 403})
+                ).model_dump()
+            );
+        }
+        return original_handler();
+    }
+    return admin_metrics_handler;
 }

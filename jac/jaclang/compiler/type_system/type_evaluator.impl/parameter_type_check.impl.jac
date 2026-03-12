@@ -8,7 +8,6 @@ impl TypeEvaluator.validate_arg_types(
         if param is None or param.param_type is None {
             continue;
         }
-
         if isinstance(arg, uni.KWPair) {
             arg_type = self.get_type_of_expression(arg.value);
         } else {
@@ -37,6 +36,47 @@ a diagnostic and sets argumentErrors to true.
 """
 impl TypeEvaluator.validate_call_args(expr: uni.FuncCall) -> TypeBase {
     caller_type = self.get_type_of_expression(expr.target);
+
+    # TypeVar handling - use bound type if available (Pyright: typeVar6)
+    if isinstance(caller_type, types.TypeVarType) {
+        if caller_type.bound {
+            # Bounded TypeVar - check if bound type has __call__
+            bound_type = caller_type.bound;
+            if isinstance(bound_type, types.ClassType) {
+                # First check if bound type has __call__ method at all
+                call_member = self._lookup_class_member(bound_type, "__call__");
+                if call_member {
+                    # Bound type is callable - validate call arguments
+                    call_type = self.get_type_of_symbol(call_member.symbol);
+                    if isinstance(call_type, types.FunctionType) {
+                        # Validate arguments against the __call__ signature
+                        arg_param_match = self.match_args_to_params(
+                            expr.params, expr, call_type
+                        );
+                        if not arg_param_match.argument_errors {
+                            self.validate_arg_types(arg_param_match);
+                        }
+                        return call_type.return_type or types.UnknownType();
+                    }
+                    # Fallback to magic method call
+                    call_ret = self.get_type_of_magic_method_call(
+                        bound_type, "__call__", expr.params, expr
+                    );
+                    if call_ret {
+                        return call_ret;
+                    }
+                    return types.UnknownType();
+                }
+                # Bound type is not callable (no __call__ method)
+                self.add_diagnostic(expr, f'Type "{bound_type}" is not callable');
+                return types.UnknownType();
+            }
+        }
+        # Unbounded TypeVar - not callable
+        self.add_diagnostic(expr, f'Type "{caller_type.name}" is not callable');
+        return types.UnknownType();
+    }
+
     is_unbound_call = self._is_unbound_method_call(expr);
     if isinstance(caller_type, types.FunctionType) {
         arg_param_match = self.match_args_to_params(
@@ -51,6 +91,18 @@ impl TypeEvaluator.validate_call_args(expr: uni.FuncCall) -> TypeBase {
         # Prefer overloads with concrete (non-Unknown) return types
         # to avoid broken overloads (e.g. LiteralString) shadowing correct ones.
         _fallback_result: types.TypeBase | None = None;
+
+        # Helper to check if a type contains Unknown (either is Unknown or has Unknown in type_args)
+        def _contains_unknown(ty: types.TypeBase) -> bool {
+            if isinstance(ty, types.UnknownType) {
+                return True;
+            }
+            if isinstance(ty, types.ClassType) and ty.private.type_args {
+                return any(_contains_unknown(arg) for arg in ty.private.type_args);
+            }
+            return False;
+        }
+
         for overload in caller_type.overloads {
             arg_param_match = self.match_args_to_params(
                 expr.params,
@@ -62,7 +114,8 @@ impl TypeEvaluator.validate_call_args(expr: uni.FuncCall) -> TypeBase {
 
             if not arg_param_match.argument_errors {
                 if self.validate_arg_types(arg_param_match, checking_overload=True) {
-                    if not isinstance(overload.return_type, types.UnknownType) {
+                    # Check if return type is concrete (no Unknown types anywhere)
+                    if not _contains_unknown(overload.return_type) {
                         return overload.return_type or types.UnknownType();
                     }
                     if _fallback_result is None {
@@ -82,44 +135,127 @@ impl TypeEvaluator.validate_call_args(expr: uni.FuncCall) -> TypeBase {
     }
     if isinstance(caller_type, types.ClassType)
     and caller_type.shared == (self.prefetch and self.prefetch.type_var_class.shared) {
-        return types.TypeVarType();
+        # Pyright: createTypeVarType() - Extract TypeVar name and validate constraints
+        type_var_name = "";
+        first_constraint_arg: uni.Expr | None = None;
+        constraint_count = 0;
+
+        # Helper to extract string literal value from String or MultiString
+        def _get_string_lit_value(arg: uni.Expr) -> str | None {
+            if isinstance(arg, uni.String) {
+                return arg.lit_value;
+            } elif isinstance(arg, uni.MultiString) and arg.strings {
+                if isinstance(arg.strings[0], uni.String) {
+                    return arg.strings[0].lit_value;
+                }
+            }
+            return None;
+        }
+
+        is_covariant = False;
+        is_contravariant = False;
+        bound_type: types.TypeBase | None = None;
+
+        if expr.params and len(expr.params) > 0 {
+            first_arg = expr.params[0];
+            type_var_name = _get_string_lit_value(first_arg) or "";
+            if not type_var_name {
+                # Pyright: typeVarFirstArg
+                self.add_diagnostic(
+                    first_arg,
+                    "TypeVar() requires a string literal as the first argument"
+                );
+            }
+
+            # Count positional constraint arguments and extract variance kwargs
+            for i in range(1, len(expr.params)) {
+                arg = expr.params[i];
+                if isinstance(arg, uni.KWPair) {
+                    # Extract covariant=, contravariant=, and bound= keyword args
+                    if isinstance(arg.key, uni.Name) {
+                        if arg.key.value == "covariant"
+                        and isinstance(arg.value, uni.Bool) {
+                            is_covariant = arg.value.value;
+                        } elif arg.key.value == "contravariant"
+                        and isinstance(arg.value, uni.Bool) {
+                            is_contravariant = arg.value.value;
+                        } elif arg.key.value == "bound" {
+                            # Parse bound type expression
+                            bound_type = self.get_type_of_expression(arg.value);
+                            # Convert to instance type if needed
+                            if isinstance(bound_type, types.ClassType)
+                            and bound_type.is_instantiable() {
+                                bound_type = bound_type.clone_as_instance();
+                            }
+                        }
+                    }
+                    continue;
+                }
+                constraint_count += 1;
+                if first_constraint_arg is None {
+                    first_constraint_arg = arg;
+                }
+            }
+
+            # Pyright: typeVarSingleConstraint
+            if constraint_count == 1 and first_constraint_arg {
+                self.add_diagnostic(
+                    first_constraint_arg,
+                    "TypeVar requires at least two constrained types"
+                );
+            }
+        } else {
+            # Pyright: typeVarFirstArg
+            self.add_diagnostic(
+                expr, "TypeVar() requires a string literal as the first argument"
+            );
+        }
+        return types.TypeVarType(
+            name=type_var_name,
+            is_covariant=is_covariant,
+            is_contravariant=is_contravariant,
+            bound=bound_type
+        );
     }
     if (
         isinstance(caller_type, types.ClassType)
         and caller_type.is_instantiable_class()
     ) {
         validated = False;
+        # NamedTuple: use synthesized __new__ with field parameters (not inherited tuple.__new__)
+        if caller_type.is_namedtuple() {
+            self._validate_constructor_method(
+                expr, self._create_namedtuple_new_method(caller_type)
+            );
+            return caller_type.clone_as_instance();
+        }
         if new_method := self._lookup_class_member(caller_type, "__new__") {
             is_from_object = new_method.class_type.shared.class_name == "object";
-            method_ty = self.get_type_of_symbol(new_method.symbol);
-            overloaded_fns: list[types.FunctionType] = [method_ty];
-            for overload in new_method.overloads {
-                overload_member_ty = self.get_type_of_symbol(overload);
-
-                if isinstance(overload_member_ty, types.FunctionType) {
-                    overload_member_ty = overload_member_ty.specialize(caller_type);
-                    overloaded_fns.append(overload_member_ty);
-                }
-            }
-            overloaded_ty: types.OverloadedType | None = None;
-            if len(overloaded_fns) > 1 {
-                overloaded_ty = types.OverloadedType(overloads=overloaded_fns);
-            }
             if not is_from_object {
                 validated = self._validate_constructor_method(
-                    expr, overloaded_ty or method_ty
+                    expr, self._get_method_with_overloads(new_method, caller_type)
                 );
             }
         }
         # Fall back to init if __new__ didn't have meaningful params
         if not validated {
             init_method = self._lookup_class_member(caller_type, "init");
-            if init_method {
-                validated = self._validate_constructor_method(
-                    expr, self.get_type_of_symbol(init_method.symbol)
-                );
-            }
-            if not validated and caller_type.is_data_class() {
+            is_from_object = init_method
+            and init_method.class_type.shared.class_name == "object";
+            # User-defined init: validate args against explicit init.
+            if init_method and not is_from_object {
+                # Get init type including overloads, then validate call args.
+                method_ty = self._get_method_with_overloads(init_method, caller_type);
+                validated = self._validate_constructor_method(expr, method_ty);
+                if not validated and expr.params {
+                    # Validate args for init without matching overload to emit arity errors.
+                    init_sym_type = self.get_type_of_symbol(init_method.symbol);
+                    if isinstance(init_sym_type, types.FunctionType) {
+                        self.match_args_to_params(expr.params, expr, init_sym_type);
+                    }
+                }
+            } elif caller_type.is_data_class() {
+                # Validate args for dataclass init auto-generated from has-vars.
                 self._validate_constructor_method(
                     expr, self._create_dataclass_init_method(caller_type)
                 );
@@ -128,6 +264,16 @@ impl TypeEvaluator.validate_call_args(expr: uni.FuncCall) -> TypeBase {
         return caller_type.clone_as_instance();
     }
     if caller_type.is_class_instance() {
+        # Any type is callable and returns Any. This is essential for
+        # proxy patterns using __getattr__ that return Any.
+        if (
+            isinstance(caller_type, types.ClassType)
+            and self.prefetch.any_class
+            and caller_type.shared == self.prefetch.any_class.shared
+        ) {
+            return caller_type;  # Any() -> Any
+
+        }
         magic_call_ret = self.get_type_of_magic_method_call(
             caller_type, "__call__", expr.params, expr
         );
@@ -259,4 +405,36 @@ impl TypeEvaluator._validate_constructor_method(
         return True;
     }
     return False;
+}
+
+"""
+Extract and build the complete method type including all overloads.
+
+Combines the base method with all its overload signatures, specializing each
+with the caller's class type. Returns an OverloadedType when multiple signatures
+exist, otherwise returns the base FunctionType.
+"""
+impl TypeEvaluator._get_method_with_overloads(
+    method_member: Any, caller_type: types.ClassType
+) -> TypeBase {
+    # Start with the base method as the first (and possibly only) signature.
+    method_ty = self.get_type_of_symbol(method_member.symbol);
+    # Replace generic T with actual type for the base method too (e.g. T -> int for Foo[int]).
+    if isinstance(method_ty, types.FunctionType) {
+        method_ty = method_ty.specialize(caller_type);
+    }
+    overloaded_fns: list[types.FunctionType] = [method_ty];
+    for overload in method_member.overloads {
+        overload_member_ty = self.get_type_of_symbol(overload);
+        if isinstance(overload_member_ty, types.FunctionType) {
+            # Replace generic T with actual type, e.g. T -> int for Foo[int].
+            overload_member_ty = overload_member_ty.specialize(caller_type);
+            overloaded_fns.append(overload_member_ty);
+        }
+    }
+    # Multiple signatures: return all so the caller picks the right one.
+    if len(overloaded_fns) > 1 {
+        return types.OverloadedType(overloads=overloaded_fns);
+    }
+    return method_ty;
 }

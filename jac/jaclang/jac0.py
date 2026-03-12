@@ -425,6 +425,7 @@ class FuncDef:
     body: list = field(default_factory=list)
     decorators: list = field(default_factory=list)
     is_static: bool = False
+    is_classmethod: bool = False
     is_async: bool = False
 
 
@@ -533,6 +534,12 @@ class AssertStmt:
 class MatchStmt:
     subject: str = ""
     cases: list = field(default_factory=list)  # list of (pattern, body)
+
+
+@dataclass
+class SwitchStmt:
+    subject: str = ""
+    cases: list = field(default_factory=list)  # list of (pattern_or_None, body)
 
 
 @dataclass
@@ -925,11 +932,17 @@ class Parser:
 
     # ── Expression Collection ─────────────────────────────────────────────
 
-    def _collect_until(self, *stop: TT, stop_values: set | None = None) -> str:
+    def _collect_until(
+        self,
+        *stop: TT,
+        stop_values: set | None = None,
+        stop_names: set | None = None,
+    ) -> str:
         """Collect tokens until a stop token at depth 0, return as Python str."""
         toks: list[Token] = []
         depth = 0
         sv = stop_values or set()
+        sn = stop_names or set()
         while True:
             tok = self._peek()
             if tok.type == TT.EOF:
@@ -938,6 +951,8 @@ class Parser:
                 if tok.type in stop:
                     break
                 if tok.type == TT.OP and tok.value in sv:
+                    break
+                if sn and tok.type == TT.NAME and tok.value in sn:
                     break
             if tok.type in (TT.LPAREN, TT.LBRACKET, TT.LBRACE):
                 depth += 1
@@ -948,10 +963,17 @@ class Parser:
             toks.append(self._advance())
         return tokens_to_str(toks)
 
-    def _collect_type(self, *extra_stop: TT, stop_vals: set | None = None) -> str:
+    def _collect_type(
+        self,
+        *extra_stop: TT,
+        stop_vals: set | None = None,
+        stop_names: set | None = None,
+    ) -> str:
         """Collect type annotation tokens."""
         stops = {TT.LBRACE, TT.SEMI, TT.COMMA, *extra_stop}
-        return self._collect_until(*stops, stop_values=stop_vals or {"="})
+        return self._collect_until(
+            *stops, stop_values=stop_vals or {"="}, stop_names=stop_names
+        )
 
     def _collect_dotted(self) -> str:
         # Handle leading dots for relative imports (e.g., .tokens, ..utils)
@@ -1033,6 +1055,9 @@ class Parser:
             if v == "import":
                 return self._parse_import()
             if v in ("class", "obj", "node", "edge", "walker"):
+                # Disambiguate: class def/can = classmethod, class Name = archetype
+                if v == "class" and self._peek(1).value in ("def", "can", "async"):
+                    return self._parse_funcdef([])
                 return self._parse_class([])
             if v == "enum":
                 return self._parse_enum([])
@@ -1062,6 +1087,8 @@ class Parser:
                 return self._parse_with_stmt()
             if v == "match":
                 return self._parse_match()
+            if v == "switch":
+                return self._parse_switch()
             if v == "if":
                 return self._parse_if()
             if v == "for":
@@ -1255,17 +1282,31 @@ class Parser:
 
     def _parse_funcdef(self, decorators: list[str]) -> FuncDef:
         is_static = False
+        is_classmethod = False
         is_async = False
-        # Handle both orders: static async def / async static def
-        if self._match(TT.NAME, "static"):
+        # Handle modifiers: class/static async def / async class/static def
+        if self._match(TT.NAME, "class"):
+            is_classmethod = True
+        elif self._match(TT.NAME, "static"):
             is_static = True
         if self._match(TT.NAME, "async"):
             is_async = True
-        if not is_static and self._match(TT.NAME, "static"):
+        if not is_static and not is_classmethod and self._match(TT.NAME, "static"):
             is_static = True
+        if not is_classmethod and not is_static and self._match(TT.NAME, "class"):
+            is_classmethod = True
         # consume 'def' or 'can'
         self._advance()
         name = self._expect(TT.NAME).value
+        # Skip optional type parameters: def foo[T, E](...)
+        if self._match(TT.LBRACKET):
+            depth = 1
+            while depth > 0 and not self._at(TT.EOF):
+                if self._at(TT.LBRACKET):
+                    depth += 1
+                elif self._at(TT.RBRACKET):
+                    depth -= 1
+                self._advance()
         params: list[Param] = []
         if self._match(TT.LPAREN):
             params = self._parse_params()
@@ -1286,6 +1327,7 @@ class Parser:
             body=body,
             decorators=decorators,
             is_static=is_static,
+            is_classmethod=is_classmethod,
             is_async=is_async,
         )
 
@@ -1344,7 +1386,7 @@ class Parser:
         while True:
             name = self._expect(TT.NAME).value
             self._expect(TT.COLON)
-            type_ann = self._collect_type(stop_vals={"="})
+            type_ann = self._collect_type(stop_vals={"="}, stop_names={"by"})
             default = ""
             by_postinit = False
             if self._match_op("="):
@@ -1401,7 +1443,6 @@ class Parser:
     def _parse_impl(self, decorators: list[str]) -> ImplDef:
         self._expect(TT.NAME, "impl")
         is_static = False
-        is_async = False
         target = self._collect_dotted()
         params: list[Param] = []
         if self._at(TT.LPAREN):
@@ -1421,7 +1462,6 @@ class Parser:
             body=body,
             decorators=decorators,
             is_static=is_static,
-            is_async=is_async,
         )
 
     # ── With Entry ────────────────────────────────────────────────────────
@@ -1508,6 +1548,48 @@ class Parser:
             cases.append((pattern, body))
         self._expect(TT.RBRACE)
         return MatchStmt(subject=subject, cases=cases)
+
+    def _parse_switch(self) -> SwitchStmt:
+        self._expect(TT.NAME, "switch")
+        subject = self._collect_until(TT.LBRACE)
+        self._expect(TT.LBRACE)
+        cases: list[tuple[str | None, list]] = []
+        while not self._at(TT.RBRACE) and not self._at(TT.EOF):
+            if self._match(TT.NAME, "default"):
+                self._expect(TT.COLON)
+                body: list = []
+                while (
+                    not self._at(TT.RBRACE)
+                    and not self._at(TT.EOF)
+                    and not (
+                        self._peek().type == TT.NAME
+                        and self._peek().value in ("case", "default")
+                    )
+                ):
+                    node = self._parse_item()
+                    if node is not None:
+                        body.append(node)
+                cases.append((None, body))
+            elif self._match(TT.NAME, "case"):
+                pattern = self._collect_until(TT.COLON)
+                self._expect(TT.COLON)
+                body = []
+                while (
+                    not self._at(TT.RBRACE)
+                    and not self._at(TT.EOF)
+                    and not (
+                        self._peek().type == TT.NAME
+                        and self._peek().value in ("case", "default")
+                    )
+                ):
+                    node = self._parse_item()
+                    if node is not None:
+                        body.append(node)
+                cases.append((pattern, body))
+            else:
+                break
+        self._expect(TT.RBRACE)
+        return SwitchStmt(subject=subject, cases=cases)
 
     def _parse_while(self) -> WhileStmt:
         self._expect(TT.NAME, "while")
@@ -1732,6 +1814,8 @@ class CodeGen:
             self._emit_try(node)
         elif isinstance(node, MatchStmt):
             self._emit_match(node)
+        elif isinstance(node, SwitchStmt):
+            self._emit_switch(node)
         elif isinstance(node, WithStmt):
             self._emit_with(node)
         elif isinstance(node, ReturnStmt):
@@ -1784,7 +1868,30 @@ class CodeGen:
         if node.is_dataclass:
             has_dc = any("dataclass" in d for d in node.decorators)
             if not has_dc:
-                self._line("@dataclass")
+                # Check if the class has 'has' fields
+                has_fields = any(isinstance(n, HasDecl) for n in node.body)
+                # Check if the class has a manual __init__ (def init)
+                impls = self.impl_registry.get(node.name, [])
+                has_init = any(
+                    isinstance(n, FuncDef) and n.name in ("init", "__init__")
+                    for n in node.body
+                ) or any(
+                    i.target.endswith(".init") or i.target.endswith(".__init__")
+                    for i in impls
+                )
+                if has_fields and not has_init:
+                    # Class uses has fields with dataclass-generated __init__
+                    # Use kw_only=True when class has parents to avoid
+                    # field ordering issues (child required fields after
+                    # parent defaulted fields)
+                    if node.bases:
+                        self._line("@dataclass(eq=False, repr=False, kw_only=True)")
+                    else:
+                        self._line("@dataclass(eq=False, repr=False)")
+                else:
+                    # Suppress dataclass __init__ to preserve manual
+                    # or inherited __init__
+                    self._line("@dataclass(eq=False, repr=False, init=False)")
         tp_str = f"[{node.type_params}]" if node.type_params else ""
         base_str = f"({node.bases})" if node.bases else ""
         self._line(f"class {node.name}{tp_str}{base_str}:")
@@ -1792,14 +1899,37 @@ class CodeGen:
         body = node.body
         # Stitch impls
         impls = self.impl_registry.get(node.name, [])
+        # Build lookup of stub FuncDefs (;-terminated) for decorator merging
+        _dunder_names = {"init": "__init__", "postinit": "__post_init__"}
+        stub_lookup: dict[str, FuncDef] = {}
+        if impls:
+            for n in body:
+                if isinstance(n, FuncDef):
+                    stub_name = _dunder_names.get(n.name, n.name)
+                    is_stub = len(n.body) == 1 and isinstance(n.body[0], PassStmt)
+                    if is_stub:
+                        stub_lookup[stub_name] = n
+        # Determine which stubs to skip (have matching impl)
+        impl_method_names: set[str] = set()
+        for impl in impls:
+            parts = impl.target.split(".")
+            mname = parts[-1] if len(parts) > 1 else parts[0]
+            mname = _dunder_names.get(mname, mname)
+            impl_method_names.add(mname)
         if not body and not impls:
             self._line("pass")
         else:
             prev_in_class = self._in_class
             self._in_class = True
-            self._emit_body(body)
+            # Emit body but skip stubs that have matching impls
+            for bnode in body:
+                if isinstance(bnode, FuncDef):
+                    fname = _dunder_names.get(bnode.name, bnode.name)
+                    if fname in impl_method_names and fname in stub_lookup:
+                        continue  # Skip stub; impl will provide the method
+                self._emit(bnode)
             for impl in impls:
-                self._emit_impl_as_method(impl)
+                self._emit_impl_as_method(impl, stub_lookup)
             self._in_class = prev_in_class
         self.indent -= 1
         self._line()
@@ -1830,14 +1960,25 @@ class CodeGen:
     def _emit_func(self, node: FuncDef) -> None:
         for dec in node.decorators:
             self._line(f"@{dec}")
+        if node.is_classmethod:
+            self._line("@classmethod")
         if node.is_static:
             self._line("@staticmethod")
-        name = "__init__" if node.name == "init" else node.name
+        _dunder_names = {"init": "__init__", "postinit": "__post_init__"}
+        name = _dunder_names.get(node.name, node.name)
         func_params = list(node.params)
-        # Auto-add self for instance methods inside a class
+        # Auto-add cls for classmethods inside a class
         if (
             self._in_class
+            and node.is_classmethod
+            and (not func_params or func_params[0].name not in ("self", "cls"))
+        ):
+            func_params.insert(0, Param(name="cls"))
+        # Auto-add self for instance methods inside a class
+        elif (
+            self._in_class
             and not node.is_static
+            and not node.is_classmethod
             and (not func_params or func_params[0].name not in ("self", "cls"))
         ):
             func_params.insert(0, Param(name="self"))
@@ -1904,23 +2045,51 @@ class CodeGen:
 
     # ── Impl as Method ────────────────────────────────────────────────────
 
-    def _emit_impl_as_method(self, impl: ImplDef) -> None:
+    def _emit_impl_as_method(
+        self, impl: ImplDef, stub_lookup: dict[str, FuncDef] | None = None
+    ) -> None:
         parts = impl.target.split(".")
         method_name = parts[-1] if len(parts) > 1 else parts[0]
-        if method_name == "init":
-            method_name = "__init__"
-        for dec in impl.decorators:
+        _dunder_names = {"init": "__init__", "postinit": "__post_init__"}
+        method_name = _dunder_names.get(method_name, method_name)
+        # Merge decorator/flag info from the matching stub declaration
+        is_static = impl.is_static
+        is_classmethod = False
+        is_async = impl.is_async
+        decorators = list(impl.decorators)
+        stub = stub_lookup.get(method_name) if stub_lookup else None
+        if stub:
+            # Inherit decorators from declaration that aren't already on impl
+            for dec in stub.decorators:
+                if dec not in decorators:
+                    decorators.append(dec)
+            if stub.is_static:
+                is_static = True
+            if stub.is_classmethod:
+                is_classmethod = True
+            if stub.is_async:
+                is_async = True
+        for dec in decorators:
             self._line(f"@{dec}")
-        if impl.is_static:
+        if is_classmethod:
+            self._line("@classmethod")
+        if is_static:
             self._line("@staticmethod")
         func_params = list(impl.params)
-        # Auto-add self for instance methods
-        if not impl.is_static and (
+        # Auto-add cls for classmethods
+        if is_classmethod and (
             not func_params or func_params[0].name not in ("self", "cls")
+        ):
+            func_params.insert(0, Param(name="cls"))
+        # Auto-add self for instance methods
+        elif (
+            not is_static
+            and not is_classmethod
+            and (not func_params or func_params[0].name not in ("self", "cls"))
         ):
             func_params.insert(0, Param(name="self"))
         params = self._format_params(func_params)
-        ap = "async " if impl.is_async else ""
+        ap = "async " if is_async else ""
         ret = f" -> {impl.return_type}" if impl.return_type else ""
         self._line(f"{ap}def {method_name}({params}){ret}:")
         self.indent += 1
@@ -2005,6 +2174,22 @@ class CodeGen:
             self.indent -= 1
         self.indent -= 1
 
+    def _emit_switch(self, node: SwitchStmt) -> None:
+        subject = self._strip_parens(node.subject)
+        first = True
+        for pattern, body in node.cases:
+            if pattern is None:
+                # default case
+                self._line("else:")
+            elif first:
+                self._line(f"if ({subject}) == ({pattern}):")
+                first = False
+            else:
+                self._line(f"elif ({subject}) == ({pattern}):")
+            self.indent += 1
+            self._emit_body(body)
+            self.indent -= 1
+
 
 # =============================================================================
 # Orchestrator
@@ -2018,22 +2203,53 @@ def discover_impl_files(jac_path: str) -> list[str]:
     dir_path = os.path.dirname(jac_path) or "."
     base_name = os.path.basename(base)
 
-    # Same directory: foo.impl.jac
+    # Detect variant suffix (.na, .sv, .cl) and compute bare base
+    bare_base = base
+    bare_base_name = base_name
+    variant = None
+    for vext in (".na", ".sv", ".cl"):
+        if base_name.endswith(vext):
+            variant = vext
+            bare_base_name = base_name[: -len(vext)]
+            bare_base = os.path.join(dir_path, bare_base_name)
+            break
+
+    # Same directory: foo.impl.jac (or foo.na.impl.jac for variants)
     impl_file = f"{base}.impl.jac"
     if os.path.isfile(impl_file):
         impls.append(impl_file)
 
-    # Module folder: foo.impl/*.impl.jac
+    # Module folder: foo.impl/*.impl.jac (or foo.na.impl/*.impl.jac)
     impl_dir = f"{base}.impl"
     if os.path.isdir(impl_dir):
         for f in sorted(os.listdir(impl_dir)):
             if f.endswith(".impl.jac"):
                 impls.append(os.path.join(impl_dir, f))
 
-    # Shared folder: impl/foo.impl.jac
+    # Shared folder: impl/foo.impl.jac (or impl/foo.na.impl.jac)
     shared_impl = os.path.join(dir_path, "impl", f"{base_name}.impl.jac")
     if os.path.isfile(shared_impl):
         impls.append(shared_impl)
+
+    # For variant files, also check bare impl files when no bare head exists
+    if variant is not None:
+        bare_head = f"{bare_base}.jac"
+        if not os.path.isfile(bare_head):
+            # Same directory: foo.impl.jac
+            bare_impl = f"{bare_base}.impl.jac"
+            if os.path.isfile(bare_impl) and bare_impl not in impls:
+                impls.append(bare_impl)
+            # Module folder: foo.impl/*.impl.jac
+            bare_impl_dir = f"{bare_base}.impl"
+            if os.path.isdir(bare_impl_dir):
+                for f in sorted(os.listdir(bare_impl_dir)):
+                    fp = os.path.join(bare_impl_dir, f)
+                    if f.endswith(".impl.jac") and fp not in impls:
+                        impls.append(fp)
+            # Shared folder: impl/foo.impl.jac
+            bare_shared = os.path.join(dir_path, "impl", f"{bare_base_name}.impl.jac")
+            if os.path.isfile(bare_shared) and bare_shared not in impls:
+                impls.append(bare_shared)
 
     return impls
 

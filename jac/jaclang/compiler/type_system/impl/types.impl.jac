@@ -53,6 +53,9 @@ impl ModuleType.__str__ -> str {
 
 """Return a string representation of the type variable."""
 impl TypeVarType.__str__ -> str {
+    if self.name {
+        return self.name;
+    }
     return "<TypeVar>";
 }
 
@@ -61,7 +64,12 @@ impl FunctionType._index_of_type_param(
     class_type: ClassType, type_var: TypeVarType
 ) -> int {
     for (idx, type_param) in enumerate(class_type.shared.type_params) {
-        if (type_param is type_var) {
+        # Compare by name instead of identity (Pyright uses scopeId + name)
+        if type_param.name and type_var.name and type_param.name == type_var.name {
+            return idx;
+        }
+        # Fallback to identity check for backwards compatibility
+        if type_param is type_var {
             return idx;
         }
     }
@@ -94,6 +102,10 @@ impl FunctionType.specialize(class_type: ClassType) -> FunctionType {
             ty = class_type.private.type_args[idx];
             ty = ty.clone_as_instance() if isinstance(ty, ClassType) else ty;
             param.param_type = ty;
+        } elif idx != -1 {
+            # TypeVar found in class type params but no matching type_arg
+            # (bare generic like list without [int]). Degrade to Unknown.
+            param.param_type = UnknownType();
         }
     }
     if (clone.return_type and isinstance(clone.return_type, TypeVarType)) {
@@ -102,6 +114,9 @@ impl FunctionType.specialize(class_type: ClassType) -> FunctionType {
             ty = class_type.private.type_args[idx];
             ty = ty.clone_as_instance() if isinstance(ty, ClassType) else ty;
             clone.return_type = ty;
+        } elif idx != -1 {
+            # TypeVar found but unresolved — degrade to Unknown.
+            clone.return_type = UnknownType();
         }
     }
     return clone;
@@ -186,6 +201,11 @@ impl ClassType.is_data_class -> bool {
     return self.shared.is_data_class;
 }
 
+"""Return true if this class is a NamedTuple."""
+impl ClassType.is_namedtuple -> bool {
+    return self.shared.is_namedtuple;
+}
+
 """Return true if this class is an enum class."""
 impl ClassType.is_enum_class -> bool {
     return self.shared.is_enum_class;
@@ -210,14 +230,62 @@ impl ClassType.is_builtin(class_name: (str | None) = None) -> bool {
 impl ClassType.lookup_member_symbol(
     member: str, r_overloaded: list | None = None
 ) -> (Symbol | None) {
+    import jaclang.jac0core.unitree as uni;
     for cls in self.shared.mro {
-        members = cls.shared.symbol_table.names_in_scope;
-        overloads = cls.shared.symbol_table.names_in_scope_overload;
-        if (member in members) {
-            if r_overloaded is not None and (member in overloads) {
-                r_overloaded.extend(overloads[member]);
+        all_syms = cls.shared.symbol_table.lookup_all(member, deep=False);
+        if all_syms {
+            if r_overloaded is not None and len(all_syms) > 1 {
+                r_overloaded.extend(all_syms[1:]);
             }
-            return members[member];
+            return all_syms[0];
+        }
+    }
+    # Fallback: check __init__ parameters and body for self-assignments.
+    # When a class/obj is imported from another module, its impl file's self.x
+    # assignments may not have been processed by _populate_self_member_symbols.
+    # This fallback scans init params and body to resolve instance attributes.
+    for cls in self.shared.mro {
+        arch = cls.shared.symbol_table;
+        if not isinstance(arch, uni.Archetype) {
+            continue;
+        }
+        init_sym = arch.lookup('init', deep=False);
+        if not init_sym or not isinstance(init_sym.decl.name_of, uni.Ability) {
+            continue;
+        }
+        init_ability = init_sym.decl.name_of;
+        if not isinstance(init_ability.signature, uni.FuncSignature) {
+            continue;
+        }
+        # Check init parameters
+        for param in init_ability.signature.params or [] {
+            if param.name.value == member and param.name.value != 'self' {
+                arch.def_insert(param.name, access_spec=arch);
+                return arch.lookup(member, deep=False);
+            }
+        }
+        # Check self.x = ... assignments in init body (including impl body).
+        # Only for class archetypes (Python-style) — obj/node/edge/walker
+        # require explicit 'has' declarations for instance attributes.
+        if arch.arch_type.name != 'KW_CLASS' {
+            continue;
+        }
+        for trailer in init_ability.get_all_sub_nodes(uni.AtomTrailer) {
+            if not (trailer.parent and isinstance(trailer.parent, uni.Assignment)) {
+                continue;
+            }
+            if trailer != trailer.parent.target[0] {
+                continue;
+            }
+            chain = trailer.as_attr_list;
+            if (
+                len(chain) >= 2
+                and chain[0].sym_name == 'self'
+                and chain[1].sym_name == member
+            ) {
+                arch.def_insert(chain[1], access_spec=arch);
+                return arch.lookup(member, deep=False);
+            }
         }
     }
     return None;
@@ -231,7 +299,9 @@ impl ClassType.get_class_symbol -> Symbol {
 """Return a new class type specialized with the given type arguments."""
 impl ClassType.specialize_generics(type_args: list[TypeBase]) -> ClassType {
     new_private = ClassType.ClassDetailsPrivate(
-        type_args=type_args, alias_name=self.private.alias_name  # Preserve alias_name
+        type_args=type_args,
+        alias_name=self.private.alias_name,  # Preserve alias_name
+        literal_value=self.private.literal_value  # Preserve literal_value
     );
     return ClassType(shared=self.shared, private=new_private, flags=self.flags);
 }
@@ -242,7 +312,8 @@ impl ClassType.clone_as_class -> ClassType {
     }
     private = ClassType.ClassDetailsPrivate(
         type_args=self.private.type_args[:],
-        alias_name=self.private.alias_name  # Preserve alias_name
+        alias_name=self.private.alias_name,  # Preserve alias_name
+        literal_value=self.private.literal_value  # Preserve literal_value
     );
     new_flag = self.flags;
     new_flag = TypeFlags((new_flag & ~TypeFlags.Instance));
@@ -258,7 +329,8 @@ impl ClassType.clone_as_instance -> ClassType {
     }
     private = ClassType.ClassDetailsPrivate(
         type_args=self.private.type_args[:],
-        alias_name=self.private.alias_name  # Preserve alias_name
+        alias_name=self.private.alias_name,  # Preserve alias_name
+        literal_value=self.private.literal_value  # Preserve literal_value
     );
     new_instance = ClassType(shared=self.shared, private=private, flags=self.flags);
     new_flag = self.flags;
@@ -286,8 +358,43 @@ impl ClassType.is_special_form(name: str | None = None) -> bool {
     return self.private.alias_name == name;
 }
 
+"""Clone this class type with a literal value.
+
+Creates a new ClassType instance representing a Literal type like Literal["hello"].
+Similar to Pyright's creating a class type with literalValue set.
+"""
+impl ClassType.clone_with_literal(value: (str | int | bool | None)) -> ClassType {
+    private = ClassType.ClassDetailsPrivate(
+        type_args=self.private.type_args[:],
+        alias_name=None,  # Clear alias_name for literal types
+        literal_value=value
+    );
+    return ClassType(shared=self.shared, private=private, flags=self.flags);
+}
+
+"""Check if this class type is a literal type (has a literal value)."""
+impl ClassType.is_literal_type -> bool {
+    return self.private is not None and self.private.literal_value is not None;
+}
+
+"""Get the literal value of this type, or None if not a literal type."""
+impl ClassType.get_literal_value -> (str | int | bool | None) {
+    if self.private is None {
+        return None;
+    }
+    return self.private.literal_value;
+}
+
 """Return a string representation of the class type."""
 impl ClassType.__str__ -> str {
+    # Display literal types as Literal[value]
+    if self.private is not None and self.private.literal_value is not None {
+        lit_val = self.private.literal_value;
+        if isinstance(lit_val, str) {
+            return f"Literal[\"{lit_val}\"]";
+        }
+        return f"Literal[{lit_val}]";
+    }
     return f"<class {self.shared.class_name}>";
 }
 
@@ -338,10 +445,10 @@ impl TypeBase.category -> TypeCategory {
     return self.CATEGORY;
 }
 
-"""Return true if this type is UnknownType, AnyType, TypeVarType, or object."""
+"""Return true if this type is AnyType, TypeVarType, or object."""
 impl TypeBase.is_any_type -> bool {
-    # Check for UnknownType, AnyType, or TypeVarType using category
-    if self.category in (TypeCategory.Unknown, TypeCategory.Any, TypeCategory.TypeVar) {
+    # Check for AnyType or TypeVarType using category
+    if self.category in (TypeCategory.Any, TypeCategory.TypeVar) {
         return True;
     }
     # Check for object type

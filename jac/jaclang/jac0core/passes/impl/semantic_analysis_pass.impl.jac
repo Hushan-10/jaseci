@@ -72,6 +72,26 @@ impl SemanticAnalysisPass._check_archetype(
                 node_override=post_init_vars[0].name_spec
             );
         }
+        arch_kind = nd.arch_type.value;
+        for method in nd.get_methods() {
+            for dec in (method.decorators or ()) {
+                if isinstance(dec, uni.Name) {
+                    if dec.sym_name == 'classmethod' {
+                        self.log_warning(
+                            f"'@classmethod' decorator is not recommended in '{arch_kind}' definitions. "
+                            f"Use 'class def method_name(...)' syntax instead.",
+                            node_override=dec
+                        );
+                    } elif dec.sym_name == 'staticmethod' {
+                        self.log_warning(
+                            f"'@staticmethod' is not supported in '{arch_kind}' definitions. "
+                            f"Use the 'static' keyword instead (e.g., 'static def method_name').",
+                            node_override=dec
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 

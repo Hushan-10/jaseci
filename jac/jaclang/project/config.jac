@@ -28,13 +28,21 @@ obj ProjectConfig {
 obj RunConfig {
     has session: str = "",
         main: bool = True,
-        cache: bool = True;
+        cache: bool = True,
+        autonative: bool = False;
+}
+
+"""Native compilation settings from [build.native] section."""
+obj NativeBuildConfig {
+    has opt_level: int = 2,  # LLVM optimization level (0-3)
+        dump_ir: str = "";  # Path to dump optimized IR (empty = disabled)
 }
 
 """Build command defaults and artifact directories from [build] section."""
 obj BuildConfig {
     has typecheck: bool = False,
-        dir: str = ".jac";  # Base directory for all build artifacts
+        dir: str = ".jac",  # Base directory for all build artifacts
+        native: NativeBuildConfig = NativeBuildConfig();
 }
 
 """Test command defaults from [test] section."""
@@ -225,7 +233,7 @@ def discover_config_files(project_root: Path, profile: str | None = None) -> lis
 def _parse_toml_data(data: dict[str, Any], toml_path: Path | None = None) -> JacConfig;
 
 # Recursively apply environment variable interpolation
-def _interpolate_recursive(obj: Any) -> Any;
+def _interpolate_recursive(`obj: Any) -> Any;
 
 glob _config: JacConfig | None = None;
 

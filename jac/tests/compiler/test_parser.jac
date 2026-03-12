@@ -67,6 +67,7 @@ test "all ast has normalize" {
         "UniNode",
         "UniScopeNode",
         "UniCFGNode",
+        "ConditionalNode",
         "ContextAwareNode",
         "ProgramModule",
         "WalkerStmtOnlyNode",
@@ -138,12 +139,14 @@ test "new keyword errors" {
     prog = JacProgram();
     prog.compile(os.path.join(FIXTURES, "new_keyword_err.jac"));
     sys.stdout = sys.__stdout__;
-    assert len(prog.errors_had) == 4;
+    assert len(prog.errors_had) == 6;
     expected_substrings = [
         "The 'new' keyword is not supported in Jac",
         "Use `Reflect.construct(target, argumentsList)` method to create new instances",
+        "Missing ';'",
         "The 'new' keyword is not supported in Jac",
         "Use `Reflect.construct(target, argumentsList)` method to create new instances",
+        "Missing ';'",
 
     ];
     for (alrt, expected) in zip(prog.errors_had, expected_substrings, strict=True) {
@@ -176,8 +179,13 @@ test "multiple syntax errors" {
     prog = JacProgram();
     prog.compile(os.path.join(FIXTURES, "multiple_syntax_err.jac"));
     sys.stdout = sys.__stdout__;
-    assert len(prog.errors_had) == 3;
-    expected_substrings = ["Missing ')'", "Missing ','", "Unexpected token", ];
+    assert len(prog.errors_had) == 4;
+    expected_substrings = [
+        "Missing ')'",
+        "Missing ','",
+        "Unexpected token",
+        "Missing ';'"
+    ];
     for (alrt, expected) in zip(prog.errors_had, expected_substrings, strict=True) {
         pretty = alrt.pretty_print();
         assert expected in pretty;
@@ -493,6 +501,31 @@ def parser_file_test(rel_path: str) -> None {
             f"{filename}: parse_errors={len(parse_errors)}, lex_errors={len(lex_errors)}"
         );
     }
+}
+
+test "decorated test blocks" {
+    # Single decorator on test
+    source = '@my_dec\ntest "decorated" { assert True; }';
+    mod = JacProgram().parse_str(source, "test.jac");
+    t = mod.body[0];
+    assert isinstance(t, uni.Test);
+    assert t.decorators is not None;
+    assert len(t.decorators) == 1;
+    assert t.description is not None;
+
+    # Multiple decorators on test
+    source = '@dec1\n@dec2(42)\ntest "multi" { assert True; }';
+    mod = JacProgram().parse_str(source, "test.jac");
+    t = mod.body[0];
+    assert isinstance(t, uni.Test);
+    assert len(t.decorators) == 2;
+
+    # No decorator still works
+    source = 'test "plain" { assert True; }';
+    mod = JacProgram().parse_str(source, "test.jac");
+    t = mod.body[0];
+    assert isinstance(t, uni.Test);
+    assert not t.decorators;
 }
 
 with entry {

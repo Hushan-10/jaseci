@@ -37,4 +37,24 @@ class TypeCheckPass(UniPass) {
     def exit_edge_ref_trailer(self: TypeCheckPass, nd: uni.EdgeRefTrailer) -> None;
     def exit_special_var_ref(self: TypeCheckPass, nd: uni.SpecialVarRef) -> None;
     def exit_name(self: TypeCheckPass, nd: uni.Name) -> None;
+    def enter_if_stmt(self: TypeCheckPass, nd: uni.IfStmt) -> None;
+    def exit_if_stmt(self: TypeCheckPass, nd: uni.IfStmt) -> None;
+    def exit_param_var(self: TypeCheckPass, nd: uni.ParamVar) -> None;
+    def exit_has_var(self: TypeCheckPass, nd: uni.HasVar) -> None;
+    def exit_in_for_stmt(self: TypeCheckPass, nd: uni.InForStmt) -> None;
+    def exit_raise_stmt(self: TypeCheckPass, nd: uni.RaiseStmt) -> None;
+    def enter_with_stmt(self: TypeCheckPass, nd: uni.WithStmt) -> None;
+    def exit_with_stmt(self: TypeCheckPass, nd: uni.WithStmt) -> None;
+    def exit_while_stmt(self: TypeCheckPass, nd: uni.WhileStmt) -> None;
+    def exit_assert_stmt(self: TypeCheckPass, nd: uni.AssertStmt) -> None;
+    def exit_yield_expr(self: TypeCheckPass, nd: uni.YieldExpr) -> None;
+    def exit_delete_stmt(self: TypeCheckPass, nd: uni.DeleteStmt) -> None;
+    def exit_visit_stmt(self: TypeCheckPass, nd: uni.VisitStmt) -> None;
+    def exit_report_stmt(self: TypeCheckPass, nd: uni.ReportStmt) -> None;
+    def exit_impl_def(self: TypeCheckPass, nd: uni.ImplDef) -> None;
+    def exit_sub_tag(self: TypeCheckPass, nd: uni.SubTag[uni.T]) -> None;
+    def _eval_unpacking_names(self: TypeCheckPass, container: uni.Expr) -> None;
+    def _body_always_returns(
+        self: TypeCheckPass, body: list[uni.CodeBlockStmt]
+    ) -> bool;
 }

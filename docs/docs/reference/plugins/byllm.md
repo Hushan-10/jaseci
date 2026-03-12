@@ -1,6 +1,8 @@
 # byLLM Reference
 
-Complete reference for byLLM, the AI integration framework implementing Meaning-Typed Programming (MTP).
+byLLM lets you delegate function implementations to large language models. You declare a function signature -- its name, parameter names, and types -- append `by llm`, and the LLM infers the behavior at runtime. byLLM handles prompt construction, model communication, response parsing, and type validation, so your Jac type annotations act as an enforced output schema.
+
+This approach is called **Meaning-Typed Programming (MTP)**: well-named function signatures already describe what a function should do, and byLLM makes that intent executable. This reference covers MTP concepts, configuration, structured outputs, tool calling, and provider setup.
 
 ---
 
@@ -98,7 +100,7 @@ glob llm = Model(model_name="gpt-4o");
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `model_name` | str | Yes | Model identifier (e.g., "gpt-4o", "claude-3-5-sonnet-20240620") |
+| `model_name` | str | Yes | Model identifier (e.g., "gpt-4o", "claude-sonnet-4-6") |
 | `api_key` | str | No | API key for the model provider (defaults to environment variable) |
 | `config` | dict | No | Configuration dictionary (see below) |
 
@@ -180,7 +182,7 @@ You can also override per-file with `glob llm = Model(...)` (see [Custom Model (
 | Provider | Model Name Format | Example |
 |----------|-------------------|---------|
 | OpenAI | `gpt-*` | `gpt-4o`, `gpt-4o-mini` |
-| Anthropic | `claude-*` | `claude-3-5-sonnet-20240620` |
+| Anthropic | `claude-*` | `claude-sonnet-4-6` |
 | Google | `gemini/*` | `gemini/gemini-2.0-flash` |
 | Ollama | `ollama/*` | `ollama/llama3:70b` |
 | HuggingFace | `huggingface/*` | `huggingface/meta-llama/Llama-3.3-70B-Instruct` |
@@ -414,7 +416,9 @@ Parameters passed to `by llm()` at call time:
 | `tools` | list | Tool functions for agentic behavior (automatically enables ReAct loop) |
 | `incl_info` | dict | Additional context key-value pairs injected into the prompt |
 | `stream` | bool | Enable streaming output (only supports `str` return type) |
+| `logging` | bool | When combined with `stream=True`, yields `StreamEvent` objects instead of raw tokens. Shows intermediate steps (tool calls, results, thoughts). Default: `False` |
 | `max_react_iterations` | int | Maximum ReAct iterations before forcing final answer |
+| `max_tool_result_length` | int | Maximum characters for tool results in `StreamEvent` data (full result stays in LLM context). Default: 500 |
 
 !!! warning "Deprecated: `method` parameter"
     The `method` parameter (`"ReAct"`, `"Reason"`, `"Chain-of-Thoughts"`) is deprecated and was never functional. The ReAct tool-calling loop is automatically enabled when `tools=[...]` is provided. Simply pass `tools` directly instead of `method="ReAct"`.
@@ -440,6 +444,11 @@ def personalized_greeting(name: str) -> str by llm(
 
 # With streaming
 def generate_essay(topic: str) -> str by llm(stream=True);
+
+# With streaming + logging (yields StreamEvent objects)
+def smart_answer(question: str) -> str by llm(
+    tools=[search_db], stream=True, logging=True
+);
 ```
 
 ---
@@ -522,7 +531,7 @@ def search_db(query: str, limit: int = 10) -> list[dict] {
 }
 
 """Send an email notification."""
-def send_email(to: str, subject: str, body: str) -> bool {
+def send_email(recipient: str, subject: str, body: str) -> bool {
     # Implementation
     return True;
 }
@@ -562,7 +571,11 @@ obj Calculator {
 
 ## Streaming
 
-For real-time token output:
+byLLM supports three streaming modes, each building on the previous:
+
+### Basic Streaming
+
+Stream the final answer token by token:
 
 ```jac
 def generate_story(topic: str) -> str by llm(stream=True);
@@ -575,10 +588,140 @@ with entry {
 }
 ```
 
-**Limitations:**
+The function returns a generator that yields raw string tokens as they arrive from the LLM.
+
+### Streaming with Tools
+
+Streaming works with tool calling. The ReAct loop runs normally (non-streaming), then the **final answer** is streamed token by token:
+
+```jac
+def get_weather(city: str) -> str {
+    return f"Weather in {city}: Sunny, 22°C";
+}
+
+def answer(question: str) -> str by llm(
+    tools=[get_weather], stream=True
+);
+
+with entry {
+    for token in answer("What's the weather in Tokyo?") {
+        print(token, end="", flush=True);
+    }
+    print();
+}
+```
+
+!!! note
+    With `stream=True` alone (no `logging`), the user sees nothing during intermediate tool calls -- only the final answer is streamed. For visibility into intermediate steps, add `logging=True`.
+
+### Streaming with Logging (`StreamEvent`)
+
+Add `logging=True` alongside `stream=True` to get `StreamEvent` objects that expose every intermediate step -- tool calls, tool results, reasoning thoughts -- in real time:
+
+```jac
+import from byllm.lib { StreamEvent }
+
+def get_weather(city: str) -> str {
+    return f"Weather in {city}: Sunny, 22°C";
+}
+
+def get_population(city: str) -> str {
+    return "37.4 million (metro)";
+}
+
+def answer(question: str) -> str by llm(
+    tools=[get_weather, get_population],
+    stream=True,
+    logging=True
+);
+
+with entry {
+    for event in answer("What's the weather and population of Tokyo?") {
+        if event.event_type == "tool_call" {
+            print(f"Calling {event.data['tool']}({event.data['args']})");
+        } elif event.event_type == "tool_result" {
+            print(f"Result: {event.data['result']}");
+        } elif event.event_type == "chunk" {
+            print(event.data["content"], end="", flush=True);
+        } elif event.event_type == "steps_done" {
+            print(f"--- {event.data['iterations']} step(s) done ---");
+        } elif event.event_type == "usage" {
+            print(f"\nTokens used: {event.data['total']}");
+        }
+    }
+}
+```
+
+**Output:**
+
+```
+Calling get_weather({'city': 'Tokyo'})
+Result: Weather in Tokyo: Sunny, 22°C
+Calling get_population({'city': 'Tokyo'})
+Result: 37.4 million (metro)
+--- 2 step(s) done ---
+The weather in Tokyo is sunny at 22°C, and its population is 37.4 million...
+Tokens used: {'prompt_tokens': 850, 'completion_tokens': 45, ...}
+```
+
+With `logging=True`, the user sees the first `tool_call` event after just one LLM call (~1-2s), instead of waiting for all ReAct iterations to finish (~3-4s).
+
+### `StreamEvent` Reference
+
+`StreamEvent` has two fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_type` | str | The type of event (see table below) |
+| `data` | dict | Event-specific payload |
+
+**Event Types:**
+
+| `event_type` | When emitted | `data` fields |
+|-------------|--------------|---------------|
+| `tool_call` | LLM decided to call a tool | `tool` (str), `args` (dict), `call_id` (str), `iteration` (int) |
+| `tool_result` | Tool finished executing | `tool` (str), `result` (str, truncated), `call_id` (str), `iteration` (int) |
+| `thought` | LLM produced reasoning text before a tool call | `content` (str), `iteration` (int) |
+| `steps_done` | ReAct loop finished, final answer next | `iterations` (int), optionally `reason` (str) |
+| `chunk` | One token of the final streamed answer | `content` (str) |
+| `usage` | All LLM calls complete (always the last event) | `total` (dict), `per_call` (list[dict]) |
+
+**Importing `StreamEvent`:**
+
+=== "Jac"
+    ```jac
+    import from byllm.lib { StreamEvent }
+    ```
+
+=== "Python"
+    ```python
+    from byllm.lib import StreamEvent
+    ```
+
+### Usage Tracking
+
+The final `StreamEvent` in every `logging=True` stream is a `usage` event containing aggregated token counts across all LLM calls in that invocation:
+
+```jac
+with entry {
+    for event in my_function("input") {
+        if event.event_type == "usage" {
+            # Aggregated totals across all LLM calls
+            print(event.data["total"]);
+            # e.g. {"prompt_tokens": 1200, "completion_tokens": 85, "total_tokens": 1285}
+
+            # Per-call breakdown (one dict per LLM call in the ReAct loop)
+            for call_usage in event.data["per_call"] {
+                print(call_usage);
+            }
+        }
+    }
+}
+```
+
+### Streaming Limitations
 
 - Only supports `str` return type
-- Tool calling not supported in streaming mode
 
 ---
 
@@ -747,7 +890,6 @@ with entry {
 Multimodal works in both Python integration modes:
 
 ```python
-import jaclang
 from byllm.lib import Model, Image, by
 
 llm = Model(model_name="gpt-4o")
@@ -893,15 +1035,138 @@ Too many tools can confuse the LLM. Keep to 5-10 relevant tools per function.
 
 ## Error Handling
 
+byLLM raises typed exceptions that all inherit from `ByLLMError`. Catching the base class handles any library error; catching a specific subclass lets you respond to exactly the failure that occurred.
+
+### Exception Hierarchy
+
+```
+ByLLMError (base)
+├── AuthenticationError   - API key missing, expired, or rejected
+├── RateLimitError        - Rate limit or quota exceeded
+├── ModelNotFoundError    - Model name does not exist or is unavailable
+├── OutputConversionError - LLM response cannot be parsed / converted to the declared return type
+├── UnknownToolError      - LLM called a tool name that was not registered
+├── FinishToolError       - finish_tool output failed validation against the declared return type
+└── ConfigurationError    - Invalid byLLM usage (e.g. streaming with a non-str return type)
+```
+
+All exceptions are importable from `byllm.lib`.
+
+### Quick Reference
+
+| Exception | When raised |
+|-----------|-------------|
+| `AuthenticationError` | API key is missing, expired, or rejected by the provider |
+| `RateLimitError` | Provider rate limit or token quota is exceeded |
+| `ModelNotFoundError` | The requested `model_name` does not exist or is unavailable |
+| `OutputConversionError` | LLM returned a value that could not be converted to the declared return type; the raw string is on `e.raw_output` |
+| `UnknownToolError` | The LLM tried to call a tool function that was not in the registered tool list |
+| `FinishToolError` | The `finish_tool` output failed validation against the function's declared return type |
+| `ConfigurationError` | `by llm()` was used in an unsupported way, such as `stream=True` with a non-`str` return type |
+
+### Importing Exceptions
+
+=== "Jac"
+    ```jac
+    import from byllm.lib {
+        ByLLMError,
+        AuthenticationError,
+        RateLimitError,
+        ModelNotFoundError,
+        OutputConversionError,
+        UnknownToolError,
+        ConfigurationError
+    }
+    ```
+
+=== "Python"
+    ```python
+    from byllm.lib import (
+        ByLLMError,
+        AuthenticationError,
+        RateLimitError,
+        ModelNotFoundError,
+        OutputConversionError,
+        UnknownToolError,
+        ConfigurationError,
+    )
+    ```
+
+### Catching All byLLM Errors
+
 ```jac
+import from byllm.lib { ByLLMError }
+
 with entry {
     try {
         result = my_llm_function(input);
-    } except Exception as e {
-        print(f"LLM error: {e}");
+    } except ByLLMError as e {
+        print(f"byLLM error: {e}");
         # Fallback logic
     }
 }
+```
+
+### Catching Specific Errors
+
+```jac
+import from byllm.lib {
+    AuthenticationError,
+    RateLimitError,
+    ModelNotFoundError,
+    OutputConversionError
+}
+
+with entry {
+    try {
+        result = my_llm_function(input);
+    } except AuthenticationError as e {
+        print(f"Auth failed - check your API key: {e}");
+    } except RateLimitError as e {
+        print(f"Rate limit hit - back off and retry: {e}");
+    } except ModelNotFoundError as e {
+        print(f"Unknown model - check model_name in jac.toml: {e}");
+    } except OutputConversionError as e {
+        print(f"Bad LLM output: {e}");
+        print(f"Raw output was: {e.raw_output}");   # inspect the raw string
+    }
+}
+```
+
+### `OutputConversionError.raw_output`
+
+When the LLM returns a value that cannot be converted to the function's declared return type, `OutputConversionError` is raised and the original LLM string is attached as `raw_output`:
+
+```jac
+import from byllm.lib { OutputConversionError }
+
+obj Product {
+    has name: str;
+    has price: float;
+}
+
+def extract_product(text: str) -> Product by llm();
+
+with entry {
+    try {
+        p = extract_product("some ambiguous text");
+    } except OutputConversionError as e {
+        print(f"Conversion failed: {e}");
+        print(f"Raw LLM output: {e.raw_output}");
+    }
+}
+```
+
+### `ConfigurationError`
+
+Raised immediately (before any API call) when `by llm()` is used in a way that byLLM cannot support:
+
+```jac
+import from byllm.lib { ConfigurationError }
+
+# This will raise ConfigurationError at call time:
+# streaming is only supported for str return types.
+def get_product(prompt: str) -> Product by llm(stream=True);
 ```
 
 ---
@@ -1086,13 +1351,13 @@ For self-hosted models or custom APIs not supported by LiteLLM, create a custom 
             super().__init__(model_name=self.model_name, **self.config);
         }
 
-        def model_call_no_stream(params: dict) {
+        def model_call_no_stream(params: dict) -> object {
             client = OpenAI(api_key=self.api_key);
             response = client.chat.completions.create(**params);
             return response;
         }
 
-        def model_call_with_stream(params: dict) {
+        def model_call_with_stream(params: dict) -> object {
             client = OpenAI(api_key=self.api_key);
             response = client.chat.completions.create(stream=True, **params);
             return response;
@@ -1128,7 +1393,6 @@ byLLM provides two modes for Python integration:
 Import byLLM directly in Python using the `@by` decorator:
 
 ```python
-import jaclang
 from dataclasses import dataclass
 from byllm.lib import Model, Image, by
 
@@ -1171,7 +1435,6 @@ Implement AI features in Jac and import seamlessly into Python:
 
 === "main.py"
     ```python
-    import jaclang
     from ai import Image, Person, get_person_info
 
     img = Image("photo.jpg")
@@ -1361,6 +1624,5 @@ walker Coordinator {
 - [Structured Outputs Tutorial](../../tutorials/ai/structured-outputs.md)
 - [Agentic AI Tutorial](../../tutorials/ai/agentic.md)
 - [Multimodal AI Tutorial](../../tutorials/ai/multimodal.md)
-- [Creating byLLM Plugins](creating-plugins.md)
 - [MTP Research Paper](https://arxiv.org/abs/2405.08965)
 - [LiteLLM Documentation](https://docs.litellm.ai/docs)

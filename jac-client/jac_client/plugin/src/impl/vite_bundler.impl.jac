@@ -405,6 +405,35 @@ import {{ fileURLToPath }} from "url";
 const buildDir = path.resolve(__dirname, "..");
 const projectRoot = path.resolve(__dirname, "../../..");
 
+// Vite plugin: forward client-side runtime errors to the terminal via WebSocket
+function jacErrorReporter() {{
+  const seen = new Map();
+  return {{
+    name: "jac-error-reporter",
+    configureServer(server) {{
+      server.ws.on("jac:client-error", (data) => {{
+        const key = data.type + ":" + data.message;
+        const now = Date.now();
+        if (seen.get(key) > now - 2000) return;
+        seen.set(key, now);
+        let loc = "";
+        if (data.source) {{
+          try {{
+            var p = new URL(data.source).pathname.slice(1)
+              .replace("compiled/", "").replace(".vite/deps/", "");
+            if (p.endsWith(".js")) p = p.slice(0, -3) + ".jac";
+            loc = " (" + p;
+            if (data.line) loc += ":" + data.line;
+            if (data.column) loc += ":" + data.column;
+            loc += ")";
+          }} catch(e) {{}}
+        }}
+        console.error("Client error: " + data.type + ": " + data.message + loc);
+      }});
+    }},
+  }};
+}}
+
 /**
  * Vite DEV configuration for HMR mode
  * Proxies API routes to Python server at localhost:{api_port}
@@ -413,7 +442,8 @@ export default defineConfig({{
   define: {{
 {define_str}
   }},
-  plugins: [{(
+  plugins: [
+    jacErrorReporter(),{(
             newline + plugins_str + newline + '  '
         )
             if plugins_str
@@ -624,7 +654,7 @@ impl ViteBundler._has_typescript_support(self: ViteBundler) -> bool {
 impl ViteBundler.read_bundle(self: ViteBundler) -> tuple[str, str] {
     bundle_file = self.find_bundle();
     if not bundle_file {
-        raise ClientBundleError('Vite build completed but no bundle file found') ;
+        raise ClientBundleError('Vite build completed but no bundle file found');
     }
     bundle_code = bundle_file.read_text(encoding='utf-8');
     bundle_hash = hashlib.sha256(bundle_code.encode('utf-8')).hexdigest();
@@ -655,14 +685,14 @@ impl ViteBundler.build(self: ViteBundler, entry_file: Optional[Path] = None) -> 
     if not ensure_bun_available() {
         raise ClientBundleError(
             'Bun is required. Install manually: https://bun.sh'
-        ) from None ;
+        ) from None;
     }
     # Ensure client npm deps are configured; prompt to install defaults if missing
     if not ensure_client_deps(self.config_loader) {
         raise ClientBundleError(
             'Client dependencies not configured. Add [dependencies.npm] to jac.toml '
             'or create a project with: jac create --use client'
-        ) from None ;
+        ) from None;
     }
     self.output_dir.mkdir(parents=True, exist_ok=True);
     # Always regenerate package.json to pick up any dependency changes
@@ -704,14 +734,14 @@ impl ViteBundler.build(self: ViteBundler, entry_file: Optional[Path] = None) -> 
                 if result.returncode != 0 {
                     error_output = result.stderr or result.stdout;
                     error_msg = f"Dependency installation failed after {elapsed:.1f}s\n\n{error_output}\nCommand: bun install";
-                    raise ClientBundleError(error_msg) from None ;
+                    raise ClientBundleError(error_msg) from None;
                 }
                 console.print(f"\n  ✔ Dependencies installed ({elapsed:.1f}s)");
             } except FileNotFoundError {
                 # This shouldn't happen since we check for bun at the start
                 raise ClientBundleError(
                     'Bun command not found. Install Bun: https://bun.sh'
-                ) from None ;
+                ) from None;
             }
         }
         if self.config_path {
@@ -750,7 +780,7 @@ impl ViteBundler.build(self: ViteBundler, entry_file: Optional[Path] = None) -> 
             error_msg = f"Vite build failed after {elapsed:.1f}s\n\n{error_output}\nCommand: {' '.join(
                 command
             )}";
-            raise ClientBundleError(error_msg) from None ;
+            raise ClientBundleError(error_msg) from None;
         }
         console.print(f"\n  ✔ Client bundle built ({elapsed:.1f}s)");
     } finally {
@@ -937,8 +967,8 @@ def _forward_vite_output(
                 ready_event.set();
             }
             if ready_event.is_set() {
-                # After ready, forward non-URL output to console
-                if not _is_vite_url_line(line) {
+                # After ready, forward output to console (skip Vite URL banner lines,
+                if '[HMR]' in line or not _is_vite_url_line(line) {
                     sys_module.stdout.write(line);
                     sys_module.stdout.flush();
                 }
@@ -964,7 +994,7 @@ impl ViteBundler.start_dev_server(
     if not ensure_bun_available() {
         raise ClientBundleError(
             'Bun is required for dev server. Install manually: https://bun.sh'
-        ) from None ;
+        ) from None;
     }
     build_dir = self._get_client_dir();
     self._ensure_dev_index_html(build_dir);
@@ -974,7 +1004,7 @@ impl ViteBundler.start_dev_server(
     if not dev_config.exists() {
         raise ClientBundleError(
             "Dev config not found. Call create_vite_config(is_dev=True) first."
-        ) ;
+        );
     }
     try {
         config_rel = dev_config.relative_to(build_dir);
@@ -1005,6 +1035,32 @@ impl ViteBundler._ensure_dev_index_html(self: ViteBundler, build_dir: Path) -> N
   <body>
     <div id="root"></div>
     <script type="module" src="/compiled/_entry.js"></script>
+    <script type="module">
+    if (import.meta.hot) {
+      function report(d) {
+        try { import.meta.hot.send("jac:client-error", d); } catch(e) {}
+      }
+      window.addEventListener("error", function(e) {
+        report({
+          type: e.error ? e.error.constructor.name : "Error",
+          message: e.error ? e.error.message : e.message,
+          stack: e.error ? e.error.stack : null,
+          source: e.filename || null,
+          line: e.lineno || null,
+          column: e.colno || null
+        });
+      });
+      window.addEventListener("unhandledrejection", function(e) {
+        var r = e.reason;
+        report({
+          type: r instanceof Error ? r.constructor.name : "UnhandledPromiseRejection",
+          message: r instanceof Error ? r.message : String(r),
+          stack: r instanceof Error ? r.stack : null,
+          source: null, line: null, column: null
+        });
+      });
+    }
+    </script>
   </body>
 </html>
 ''';
@@ -1043,7 +1099,7 @@ impl ViteBundler._ensure_dev_dependencies(self: ViteBundler, build_dir: Path) ->
 
         if result.returncode != 0 {
             console.error(f"\n  ✖ bun install failed after {elapsed:.1f}s");
-            raise ClientBundleError("Failed to install dependencies") ;
+            raise ClientBundleError("Failed to install dependencies");
         }
         console.print(f"\n  ✔ Dependencies installed ({elapsed:.1f}s)");
     } finally {

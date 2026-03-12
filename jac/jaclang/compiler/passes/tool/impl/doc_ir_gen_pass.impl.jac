@@ -319,6 +319,8 @@ impl DocIRGenPass.exit_impl_def(nd: uni.ImplDef) -> None {
             parts.pop();
             parts.append(i.gen.doc_ir);
             parts.append(self.space());
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.DECOR_OP)) {
+            parts.append(i.gen.doc_ir);
         } else {
             parts.append(i.gen.doc_ir);
             parts.append(self.space());
@@ -409,6 +411,8 @@ impl DocIRGenPass.exit_enum(nd: uni.Enum) -> None {
             parts.pop();
             parts.append(i.gen.doc_ir);
             parts.append(self.space());
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.DECOR_OP)) {
+            parts.append(i.gen.doc_ir);
         } else {
             parts.append(i.gen.doc_ir);
             parts.append(self.space());
@@ -761,7 +765,16 @@ impl DocIRGenPass.exit_visit_stmt(nd: uni.VisitStmt) -> None {
 
 """Generate DocIR for nonlocal statements."""
 impl DocIRGenPass.exit_non_local_stmt(nd: uni.NonLocalStmt) -> None {
-    self._assign_space_group(nd);
+    parts: list[doc.DocType] = [];
+    for i in nd.kid {
+        if (isinstance(i, uni.Token) and (i.name == Tok.SEMI) and len(parts)) {
+            parts.pop();
+        }
+        parts.append(i.gen.doc_ir);
+        parts.append(self.space());
+    }
+    parts.pop();
+    nd.gen.doc_ir = self.group(self.concat(parts, ast_node=nd), ast_node=nd);
 }
 
 """Generate DocIR for global statements."""
@@ -890,6 +903,42 @@ impl DocIRGenPass.exit_server_block(nd: uni.ServerBlock) -> None {
     nd.gen.doc_ir = self.group(self.concat(parts, ast_node=nd), ast_node=nd);
 }
 
+"""Generate DocIR for native blocks (na { ... })."""
+impl DocIRGenPass.exit_native_block(nd: uni.NativeBlock) -> None {
+    parts: list[doc.DocType] = [];
+    body_parts: list[doc.DocType] = [];
+    in_body = False;
+    prev_body_item: (uni.UniNode | None) = None;
+    for i in nd.kid {
+        if (isinstance(i, uni.Token) and (i.name == Tok.KW_NATIVE)) {
+            parts.append(i.gen.doc_ir);
+            parts.append(self.space());
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.LBRACE)) {
+            parts.append(i.gen.doc_ir);
+            body_parts.append(self.hard_line());
+            in_body = True;
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.RBRACE)) {
+            in_body = False;
+            self.trim_trailing_line(body_parts);
+            parts.append(self.indent(self.concat(body_parts), ast_node=nd));
+            if len(body_parts) {
+                parts.append(self.hard_line());
+            } else {
+                parts.append(self.line());
+            }
+            parts.append(i.gen.doc_ir);
+            parts.append(self.space());
+        } elif in_body {
+            self.add_body_stmt_with_spacing(body_parts, i, prev_body_item);
+            prev_body_item = i;
+        } else {
+            parts.append(i.gen.doc_ir);
+            parts.append(self.space());
+        }
+    }
+    nd.gen.doc_ir = self.group(self.concat(parts, ast_node=nd), ast_node=nd);
+}
+
 """Generate DocIR for global variables."""
 impl DocIRGenPass.exit_global_vars(nd: uni.GlobalVars) -> None {
     prefix_parts: list[doc.DocType] = [];
@@ -937,7 +986,16 @@ impl DocIRGenPass.exit_global_vars(nd: uni.GlobalVars) -> None {
 
 """Generate DocIR for raise statements."""
 impl DocIRGenPass.exit_raise_stmt(nd: uni.RaiseStmt) -> None {
-    self._assign_space_group(nd);
+    parts: list[doc.DocType] = [];
+    for i in nd.kid {
+        if (isinstance(i, uni.Token) and (i.name == Tok.SEMI) and len(parts)) {
+            parts.pop();
+        }
+        parts.append(i.gen.doc_ir);
+        parts.append(self.space());
+    }
+    parts.pop();
+    nd.gen.doc_ir = self.group(self.concat(parts, ast_node=nd), ast_node=nd);
 }
 
 """Generate DocIR for assert statements."""
@@ -1869,6 +1927,15 @@ impl DocIRGenPass.exit_ability(nd: uni.Ability) -> None {
             parts.append(self.space());
         } elif isinstance(i, uni.SubTag) {
             parts.pop();
+            parts.append(i.gen.doc_ir);
+            parts.append(self.space());
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.LSQUARE)) {
+            parts.append(i.gen.doc_ir);
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.RSQUARE)) {
+            parts.append(i.gen.doc_ir);
+        } elif isinstance(i, uni.TypeParam) {
+            parts.append(i.gen.doc_ir);
+        } elif (isinstance(i, uni.Token) and (i.name == Tok.COMMA)) {
             parts.append(i.gen.doc_ir);
             parts.append(self.space());
         } else {

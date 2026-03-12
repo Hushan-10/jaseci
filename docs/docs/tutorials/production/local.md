@@ -1,6 +1,8 @@
 # Local API Server
 
-Run your Jac walkers as a production-ready HTTP API server.
+During development, `jac run` executes your program and exits. But production applications need to stay running and respond to HTTP requests from browsers, mobile apps, or other services. The `jac start` command transforms your Jac application into a persistent API server -- every walker and function marked with `:pub` or `:priv` access modifiers automatically becomes a REST endpoint, complete with authentication, JSON serialization, and API documentation.
+
+This means you go from "Jac program that runs locally" to "HTTP API server that clients can call" with a single command change -- no Flask routes, no Express middleware, no API framework needed.
 
 > **Prerequisites**
 >
@@ -11,7 +13,7 @@ Run your Jac walkers as a production-ready HTTP API server.
 
 ## Overview
 
-The `jac start` command turns your walkers into REST API endpoints automatically:
+The `jac start` command turns your walkers and functions into REST API endpoints automatically:
 
 ```mermaid
 graph LR
@@ -92,6 +94,12 @@ curl -X POST http://localhost:8000/walker/add_task \
 jac start app.jac --port 3000
 ```
 
+If the specified port is already in use, the server automatically finds and uses the next available port:
+
+```
+Port 3000 is in use, using port 3001 instead
+```
+
 ### Development Mode (HMR)
 
 Hot Module Replacement for development:
@@ -107,7 +115,7 @@ Changes to your `.jac` files will automatically reload.
 Skip client bundling and only serve the API:
 
 ```bash
-jac start app.jac --dev --no-client
+jac start app.jac --dev --no_client
 ```
 
 ---
@@ -324,7 +332,11 @@ walker:pub health {
 ```
 
 ```bash
+# Built-in health endpoint (provided by jac-scale)
 curl http://localhost:8000/health
+
+# Custom health walker endpoint (POST to /walker/<name>)
+curl -X POST http://localhost:8000/walker/health
 # {"status": "healthy"}
 ```
 
@@ -354,7 +366,7 @@ walker:pub ready {
 |--------|-------------|---------|
 | `--port`, `-p` | Server port | 8000 |
 | `--dev`, `-d` | Enable Hot Module Replacement | false |
-| `--no-client`, `-n` | Skip client bundling (API only) | false |
+| `--no_client`, `-n` | Skip client bundling (API only) | false |
 | `--faux`, `-f` | Print API docs only (no server) | false |
 | `--scale` | Deploy to Kubernetes (requires jac-scale) | false |
 

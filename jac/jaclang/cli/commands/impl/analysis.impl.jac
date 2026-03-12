@@ -30,7 +30,7 @@ impl check(
     ignore_list = _normalize_ignore_patterns(ignore);
     # Helper to process and store single file result
     def process_file_result(file_path: str, idx: int, total: int) -> None {
-        nonlocal total_files , total_errors , total_warnings , failed_files ;
+        nonlocal total_files , total_errors , total_warnings , failed_files;
         total_files += 1;
         (success, errs, warns, errors_list, warnings_list) = check_single_file(
             prog, file_path
@@ -41,9 +41,10 @@ impl check(
         # Print progress line
         print_file_progress(file_path, success, idx, total);
 
-        # Store only failed results
         if not success {
             failed_files += 1;
+        }
+        if not success or (warns > 0 and not nowarn) {
             failed_results.append(
                 {'path': file_path, 'errors': errors_list, 'warnings': warnings_list}
             );
@@ -60,6 +61,7 @@ impl check(
             return (False, 1, 0, [], []);
         }
         try {
+            console.print(f"  Checking {file_path}...");
             (err_start, warn_start) = (len(prog.errors_had), len(prog.warnings_had));
             prog.compile(file_path=file_path, type_check=not parse_only, no_cgen=True);
             new_errors = prog.errors_had[err_start:];
@@ -97,40 +99,22 @@ impl check(
     }
     total_files = failed_files=total_errors=total_warnings=0;
     prog = JacProgram();
-    for path in paths {
-        path_obj = Path(path);
-        if path.endswith('.jac') {
-            if not _should_ignore(path, ignore_list) {
-                process_file_result(path, 1, 1);
-            }
-        } elif path_obj.is_dir() {
-            all_files = [
-                str(jac_file)
-                for jac_file in path_obj.glob('**/*.jac')
-                if jac_file.is_file()
-                and not _should_ignore(str(jac_file), ignore_list)
-            ];
-            total_to_check = len(all_files);
-            for (idx, jac_file_path) in enumerate(all_files, 1) {
-                process_file_result(jac_file_path, idx, total_to_check);
-            }
-        } else {
-            console.error(f"'{path}' is not a .jac file or directory.");
-            failed_files += 1;
-            total_errors += 1;
-        }
+    (all_files, had_path_errors) = _iter_jac_files(paths, ignore_list);
+    total_to_check = len(all_files);
+    for (idx, jac_file_path) in enumerate(all_files, 1) {
+        process_file_result(jac_file_path, idx, total_to_check);
     }
     # Print FAILURES section and summary
+    if print_errs and len(failed_results) > 0 {
+        print_failures(failed_results, nowarn);
+    }
     if failed_files > 0 {
-        if print_errs {
-            print_failures(failed_results, nowarn);
-        }
         print_failed_summary(failed_results);
     }
     # Print final summary line
     elapsed = time() - start_time;
     print_final_summary(total_files - failed_files, failed_files, elapsed);
-    return 1 if total_errors > 0 else 0;
+    return 1 if (total_errors > 0 or had_path_errors) else 0;
 }
 
 """Lint .jac files and report violations."""
@@ -181,17 +165,20 @@ impl lint(paths: list, fix: bool = False, ignore: list = []) -> int {
                 err_count = len(prog.errors_had) or 1;
                 return (False, err_count, err_count);
             }
-            error_count = 0;
+            # Count fixed warnings and unfixable errors
+            fixed_count = 0;
             unfixable_count = 0;
+            for warning in prog.warnings_had {
+                console.warning(f"{warning}");
+                fixed_count += 1;
+            }
             for error in prog.errors_had {
                 console.error(f"{error}");
-                error_count += 1;
-                if "[no-print]" in str(error) {
-                    unfixable_count += 1;
-                }
+                unfixable_count += 1;
             }
-            # Only write if there were lint violations to fix
-            if error_count > unfixable_count {
+            error_count = fixed_count + unfixable_count;
+            # Write if there were lint violations that were fixed
+            if fixed_count > 0 {
                 changed = formatted_code != original_code;
                 if changed {
                     with open(str(path_obj), 'w', encoding='utf-8') as f {
@@ -219,45 +206,18 @@ impl lint(paths: list, fix: bool = False, ignore: list = []) -> int {
     failed_files = 0;
     total_errors = 0;
     total_unfixable = 0;
-    for path in paths {
-        path_obj = Path(path);
-        if path.endswith('.jac') {
-            if not _should_ignore(path, ignore_list) {
-                total_files += 1;
-                if fix {
-                    (success, errors, unfixable) = lint_fix_file(path);
-                    total_unfixable += unfixable;
-                } else {
-                    (success, errors) = lint_report_file(path);
-                }
-                total_errors += errors;
-                if not success {
-                    failed_files += 1;
-                }
-            }
-        } elif path_obj.is_dir() {
-            for jac_file in path_obj.glob('**/*.jac') {
-                if not jac_file.is_file() {
-                    continue;
-                }
-                if not _should_ignore(str(jac_file), ignore_list) {
-                    total_files += 1;
-                    if fix {
-                        (success, errors, unfixable) = lint_fix_file(str(jac_file));
-                        total_unfixable += unfixable;
-                    } else {
-                        (success, errors) = lint_report_file(str(jac_file));
-                    }
-                    total_errors += errors;
-                    if not success {
-                        failed_files += 1;
-                    }
-                }
-            }
+    (all_files, had_path_errors) = _iter_jac_files(paths, ignore_list);
+    for file_path in all_files {
+        total_files += 1;
+        if fix {
+            (success, errors, unfixable) = lint_fix_file(file_path);
+            total_unfixable += unfixable;
         } else {
-            console.error(f"'{path}' is not a .jac file or directory.");
+            (success, errors) = lint_report_file(file_path);
+        }
+        total_errors += errors;
+        if not success {
             failed_files += 1;
-            total_errors += 1;
         }
     }
     failing_errors = total_unfixable if fix else total_errors;
@@ -275,7 +235,7 @@ impl lint(paths: list, fix: bool = False, ignore: list = []) -> int {
     } else {
         summary_msg = f"Linted {total_files} '.jac' files: {total_errors} errors found.";
     }
-    if failing_errors > 0 {
+    if failing_errors > 0 or had_path_errors {
         console.error(summary_msg);
         return 1;
     }
@@ -315,7 +275,7 @@ impl format(
         }
         try {
             prog = JacProgram.jac_file_formatter(str(path_obj), auto_lint=lintfix);
-            if prog.errors_had {
+            if prog.errors_had and not lintfix {
                 for error in prog.errors_had {
                     console.error(f"{error}");
                 }
@@ -324,6 +284,16 @@ impl format(
             try {
                 formatted_code = prog.mod.main.gen.jac;
                 original_code = prog.mod.main.source.code;
+
+                if not formatted_code or len(formatted_code.strip()) == 0 {
+                    if prog.errors_had {
+                        for error in prog.errors_had {
+                            console.error(f"{error}");
+                        }
+                        return (False, False, 0);
+                    }
+                }
+
                 changed = formatted_code != original_code;
                 write_formatted_code(formatted_code, str(path_obj));
 
@@ -344,9 +314,12 @@ impl format(
                 }
                 return (False, False, 0);
             }
-            # Report unfixable lint errors (e.g. [no-print])
+            # Report auto-fixed lint warnings and unfixable lint errors
             lint_errors = 0;
             if lintfix {
+                for warning in prog.warnings_had {
+                    console.warning(f"{warning}");
+                }
                 for error in prog.errors_had {
                     console.error(f"{error}");
                     lint_errors += 1;
@@ -362,40 +335,18 @@ impl format(
     failed_files = 0;
     changed_files = 0;
     total_errors = 0;
-    for path in paths {
-        path_obj = Path(path);
-        if path.endswith('.jac') {
-            total_files += 1;
-            (success, changed, errors) = format_single_file(path);
-            total_errors += errors;
-            if not success {
-                failed_files += 1;
-            } elif changed {
-                changed_files += 1;
-                if check {
-                    unformatted_files.append(path);
-                }
-            }
-        } elif path_obj.is_dir() {
-            for jac_file in path_obj.glob('**/*.jac') {
-                if not jac_file.is_file() {
-                    continue;
-                }
-                total_files += 1;
-                (success, changed, errors) = format_single_file(str(jac_file));
-                total_errors += errors;
-                if not success {
-                    failed_files += 1;
-                } elif changed {
-                    changed_files += 1;
-                    if check {
-                        unformatted_files.append(str(jac_file));
-                    }
-                }
-            }
-        } else {
-            console.error(f"'{path}' is not a .jac file or directory.");
+    (all_files, had_path_errors) = _iter_jac_files(paths);
+    for file_path in all_files {
+        total_files += 1;
+        (success, changed, errors) = format_single_file(file_path);
+        total_errors += errors;
+        if not success {
             failed_files += 1;
+        } elif changed {
+            changed_files += 1;
+            if check {
+                unformatted_files.append(file_path);
+            }
         }
     }
     # In check mode, report all issues together
@@ -436,7 +387,7 @@ impl format(
             console.success(summary_msg);
         }
     }
-    if failed_files > 0 {
+    if failed_files > 0 or had_path_errors {
         return 1;
     }
     if total_errors > 0 {
@@ -520,6 +471,37 @@ impl grammar(lark: bool = False, output: str = "") -> int {
         console.print(text);
     }
     return 0;
+}
+
+"""Iterate over .jac files from a list of paths (files or directories).
+
+Expands directories recursively, filters by ignore patterns.
+Returns (file_list, had_errors) where had_errors is True if any path was invalid.
+"""
+def _iter_jac_files(paths: list, ignore_list: list = []) -> tuple[list[str], bool] {
+    result: list[str] = [];
+    had_errors = False;
+    for path in paths {
+        path_obj = Path(path);
+        if path.endswith('.jac') {
+            if not _should_ignore(path, ignore_list) {
+                result.append(path);
+            }
+        } elif path_obj.is_dir() {
+            for jac_file in path_obj.glob('**/*.jac') {
+                if not jac_file.is_file() {
+                    continue;
+                }
+                if not _should_ignore(str(jac_file), ignore_list) {
+                    result.append(str(jac_file));
+                }
+            }
+        } else {
+            console.error(f"'{path}' is not a .jac file or directory.");
+            had_errors = True;
+        }
+    }
+    return (result, had_errors);
 }
 
 """Normalize ignore patterns by stripping whitespace and trailing slashes."""

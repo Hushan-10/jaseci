@@ -47,6 +47,7 @@ obj PrefetchedTypes {
         int_class: TypeBase | None = None,
         float_class: TypeBase | None = None,
         str_class: TypeBase | None = None,
+        bytes_class: TypeBase | None = None,
         dict_class: TypeBase | None = None,
         list_class: TypeBase | None = None,
         module_type_class: TypeBase | None = None,
@@ -69,7 +70,8 @@ obj PrefetchedTypes {
         walker_class: TypeBase | None = None,
         jsx_element_class: TypeBase | None = None,
         # Prefetched enum base class
-        enum_class: TypeBase | None = None;
+        enum_class: TypeBase | None = None,
+        set_class: TypeBase | None = None;
 }
 
 """Represents a single entry in the symbol resolution stack."""
@@ -113,7 +115,10 @@ obj TypeEvaluator {
     # NOTE: This function doesn't exists in pyright, however it exists as a helper function
     # for the following functions.
     def _import_module_from_path(path: str) -> uni.Module;
+    def _try_read_jir_cache(resolved_path: str) -> (uni.Module | None);
     def _resolve_from_path(from_mod: uni.ModulePath) -> Path;
+    def _is_fstring_all_literal(fstring: uni.FString) -> bool;
+    def _try_resolve_forward_ref(expr: uni.String) -> TypeBase | None;
     def get_type_of_module(node_: uni.ModulePath) -> types.TypeBase;
     def get_type_of_module_item(node_: uni.ModuleItem) -> types.TypeBase;
     def _extract_type_params(node_: uni.Archetype) -> list[types.TypeVarType];
@@ -126,6 +131,8 @@ obj TypeEvaluator {
     def get_type_of_expression(node_: uni.Expr) -> TypeBase;
     # Check if a type is Any, object, Unknown, or TypeVar.
     def is_any_type(ty: TypeBase) -> bool;
+    # Check if a type is the TypeVar class itself (the callable used to create TypeVars).
+    def is_typevar_class(ty: TypeBase) -> bool;
     # Comments from pyright:
     # // Determines if the source type can be assigned to the dest type.
     # // If constraint are provided, type variables within the destType are
@@ -181,6 +188,8 @@ obj TypeEvaluator {
     def _get_type_of_super(node_: uni.SpecialVarRef) -> TypeBase;
     def _get_type_of_root(node_: uni.SpecialVarRef) -> TypeBase;
     def _convert_to_instance(jtype: TypeBase) -> TypeBase;
+    def _type_in_list(ty: TypeBase, type_list: list[TypeBase]) -> bool;
+    def _collect_unique_types(ty: TypeBase, result: list[TypeBase]) -> None;
     # --- Special form handling (Callable, Union, etc.) ---
     # Returns the prefetched special form type if the name AND type match.
     # Verifies both name and that type is _SpecialForm to avoid conflicts
@@ -201,6 +210,7 @@ obj TypeEvaluator {
         base_type: types.ClassType, member: str
     ) -> type_utils.ClassMember | None;
 
+    def _get_getattr_return_type(base_type: types.ClassType) -> TypeBase | None;
     def match_args_to_params(
         arg_nodes: list[uni.Expr | uni.KWPair],
         node_for_error: uni.Expr | None,
@@ -215,25 +225,65 @@ obj TypeEvaluator {
         args: MatchArgsToParamsResult, checking_overload: bool = False
     ) -> None;
 
+    def _build_field_params(
+        class_type: types.ClassType, skip_deferred: bool = True
+    ) -> dict[str, types.Parameter];
+
     def _create_dataclass_init_method(
         class_type: types.ClassType
     ) -> types.FunctionType;
 
+    def _create_namedtuple_new_method(
+        class_type: types.ClassType
+    ) -> types.FunctionType;
+
+    def _create_special_builtin_type(
+        name: str, base_class: types.ClassType
+    ) -> types.ClassType;
+
     def _validate_constructor_method(expr: uni.FuncCall, method_type: TypeBase) -> bool;
+    def _get_method_with_overloads(
+        method_member: Any, caller_type: types.ClassType
+    ) -> TypeBase;
+
     # -------------------------------------------------------------------------
-    # Type narrowing support (CFG-based, flow-sensitive)
+    # TypeVar scope validation (Pyright: validateTypeVarUsage)
     # -------------------------------------------------------------------------
+    def validate_typevar_in_type_expr(expr: uni.Expr) -> None;
+    def validate_typevar_scope(expr: uni.Expr, type_var: types.TypeVarType) -> None;
+    def validate_typevar_variance(func: uni.Ability) -> None;
+    def validate_typevar_operation(
+        expr: uni.Expr, operand_type: types.TypeBase, operation: str
+    ) -> None;
+
+    def _get_enclosing_class_type_params(node_: uni.UniNode) -> list[types.TypeVarType];
+    def _get_function_type_params(func: uni.Ability) -> list[types.TypeVarType];
+    def _get_outer_scope_type_params(node_: uni.UniNode) -> list[types.TypeVarType];
+    # -------------------------------------------------------------------------
+    # Type narrowing support
+    #
+    # Two narrowing systems work together:
+    # 1. Scope-based narrowing: Tracks narrowings within if/AND blocks using a
+    #    stack of scope dictionaries. Used during forward AST traversal.
+    # 2. CFG-based narrowing: Walks backward through the control flow graph to
+    #    find narrowing conditions. Used for flow-sensitive analysis.
+    # -------------------------------------------------------------------------
+
+    # --- Scope-based narrowing (forward traversal) ---
+    def push_narrowing_scope -> None;
+    def pop_narrowing_scope -> None;
+    def add_scope_narrowing(key: str, narrowed_type: types.TypeBase) -> None;
+    def get_scope_narrowing(key: str) -> types.TypeBase | None;
+    def get_narrowing_key(expr: uni.Expr) -> str | None;
+    def process_condition(condition: uni.Expr) -> None;
+    # --- CFG-based narrowing (backward traversal) ---
     def get_narrowed_type(symbol: uni.Symbol, at_node: uni.UniNode) -> TypeBase | None;
     def _compute_narrowed_at(
         symbol: uni.Symbol, stmt: uni.UniCFGNode, visited: set
     ) -> TypeBase | None;
 
     def _classify_edge(pred: uni.IfStmt, succ: uni.UniCFGNode) -> str;
-    # Progressive narrowing context for AND expressions
-    def _push_and_narrowing_scope -> None;
-    def _pop_and_narrowing_scope -> None;
-    def _add_and_narrowing(sym_name: str, narrowed_type: types.TypeBase) -> None;
-    def _get_and_narrowing(sym_name: str) -> types.TypeBase | None;
+    # --- Shared narrowing utilities ---
     def _find_predicate_for(
         symbol: uni.Symbol, condition: uni.Expr
     ) -> NarrowingPredicate | None;
@@ -253,4 +303,6 @@ obj TypeEvaluator {
     def _union_narrowed_types(types_list: list) -> TypeBase;
     def exclude_type_from_union(original: TypeBase, to_exclude: TypeBase) -> TypeBase;
     def _get_type_from_match_pattern(pattern: uni.MatchPattern) -> TypeBase | None;
+    def _union_contains_none(union_type: TypeBase) -> bool;
+    def _extract_isinstance_info(condition: uni.Expr) -> tuple[str, TypeBase] | None;
 }

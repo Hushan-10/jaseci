@@ -333,11 +333,133 @@ test "cls method" {
     assert lines[2] == "Hello, World! Hello, World22!";
 }
 
+test "Self type - class def basics" {
+    output = run_jac(os.path.join(FIXTURES, "self_type.jac"));
+    lines = output.strip().split("\n");
+    line = {
+        l.split(": ", 1)[0].split(": ")[0]: l.split(": ", 1)[1]
+        for l in lines
+        if ": " in l
+    };
+    # Section 1: class def basics
+    assert line["1.1"] == "0";
+    assert line["1.2"] == "42";
+    assert line["1.3"] == "3";
+    # Section 2: Self refers to the class
+    assert line["2.1"] == "Registry";
+    assert line["2.2"] == "alpha";
+    assert line["2.3"] == "default";
+    assert line["2.4"] == "beta vip";
+    # Section 3: fluent builder
+    assert line["3.1"] == "SELECT * FROM users WHERE age > 18 AND active = 1 LIMIT 10";
+    # Section 4: inheritance polymorphism
+    assert line["4.1"] == "Rex says woof";
+    assert line["4.2"] == "Whiskers says meow";
+    assert line["4.3"] == "Dog";
+    assert line["4.4"] == "Cat";
+    assert line["4.5"] == "Derived 99 derived";
+    # Section 5: multi-level inheritance
+    assert line["5.1"] == "Shape (1.0, 2.0)";
+    assert line["5.2"] == "Circle (3.0, 4.0)";
+    assert line["5.3"] == "ColoredCircle (5.0, 6.0) red";
+    # Section 6: Self as parameter type
+    assert "4.0, 6.0" in line["6.1"];
+    assert line["6.2"] == "True";
+    assert line["6.3"] == "False";
+    # Section 7: node/edge/walker
+    assert line["7.1"] == "root@d0";
+    assert line["7.2"] == "leaf@d2";
+    assert line["7.3"] == "TreeNode";
+    assert line["7.4"] == "5.0";
+    assert line["7.5"] == "5 ['a', 'b']";
+    # Section 8: generics
+    assert line["8.1"] == "3";
+    assert line["8.2"] == "3";
+    assert line["8.3"] == "world";
+    # Section 9: enum
+    assert line["9.1"] == "3";
+    assert line["9.2"] == "True";
+    assert line["9.3"] == "False";
+    assert line["9.4"] == "Color: green";
+    # Section 10: abstract methods
+    assert line["10.1"] == "3 4";
+    assert line["10.2"] == "Point";
+    assert line["10.3"] == "True";
+    assert line["10.4"] == "1 2 3";
+    assert line["10.5"] == "Point3D";
+    # Section 11: impl blocks
+    assert line["11.1"] == "debug=True verbose=True level=3";
+    # Section 12: static fields / singleton
+    assert line["12.1"] == "42";
+    assert line["12.2"] == "42";
+    assert line["12.3"] == "True";
+    # Section 13: dunder methods
+    assert line["13.1"] == "30.0 USD";
+    assert line["13.2"] == "True";
+    assert line["13.3"] == "False";
+    # Section 14: Self vs self coexistence
+    assert line["14.1"] == "hello";
+    assert line["14.2"] == "hello";
+    assert line["14.3"] == "HELLO";
+    assert line["14.4"] == "True";
+    # Section 15: multiple classmethods
+    assert line["15.1"] == "short";
+    assert line["15.2"] == "43";
+    assert "b" * 50 in line["15.3"];
+}
+
+test "Self type - error and edge cases" {
+    output = run_jac(os.path.join(FIXTURES, "self_type_errors.jac"));
+    lines = output.strip().split("\n");
+    line = {
+        l.split(": ", 1)[0].split(": ")[0]: l.split(": ", 1)[1]
+        for l in lines
+        if ": " in l
+    };
+    # E3: class def without Self
+    assert line["E3"] == "hello";
+    # E4: classmethod called on instance
+    assert line["E4.1"] == "99";
+    assert line["E4.2"] == "Dispatchy";
+    # E5: nested class
+    assert line["E5.1"] == "10";
+    assert line["E5.2"] == "20";
+    assert line["E5.3"] == "Inner";
+    assert line["E5.4"] == "Outer";
+    # E6: Self in comprehension inside classmethod
+    assert line["E6.1"] == "3";
+    assert line["E6.2"] == "1 2 3";
+    assert line["E6.3"] == "WithLambda";
+    # E7: linked list with Self field type
+    assert line["E7.1"] == "[1, 2, 3, 4, 5]";
+    assert line["E7.2"] == "2";
+    # E8: isinstance with Self
+    assert line["E8.1"] == "True";
+    assert line["E8.2"] == "False";
+    assert line["E8.3"] == "True";
+    assert line["E8.4"] == "False";
+    # E9: static def and class def coexistence
+    assert line["E9.1"] == "7";
+    assert line["E9.2"] == "10";
+    # E10: override classmethod
+    assert line["E10.1"] == "base";
+    assert line["E10.2"] == "custom_child";
+    assert line["E10.3"] == "BaseFactory";
+    assert line["E10.4"] == "ChildFactory";
+}
+
 test "match multi ex" {
     output = run_jac(os.path.join(FIXTURES, "match_multi_ex.jac"));
     lines = output.split("\n");
     assert lines[0] == "Ten";
     assert lines[1] == "ten";
+}
+
+test "match class pattern with empty wildcard" {
+    output = run_jac(os.path.join(FIXTURES, "match_class_pattern.jac"));
+    lines = output.split("\n");
+    assert lines[0] == "int";
+    assert lines[1] == "str";
 }
 
 test "entry exit" {
@@ -679,4 +801,31 @@ test "type aliases and modern generics" {
 test "operator precedence matches python" {
     output = run_jac(os.path.join(FIXTURES, "operator_precedence.jac"));
     assert "PASS" in output , f"Operator precedence test failed:\n{output}";
+}
+
+"""Test that escape sequences like \\x1b, \\033, \\n, \\t are properly handled."""
+test "escape sequences in strings and fstrings" {
+    output = run_jac(os.path.join(FIXTURES, "escape_sequences.jac"));
+
+    # Test 1: hex \x1b in regular string → ESC (ord 27), 5 chars
+    assert "hex_escape_len:5" in output , f"Expected hex escape len 5, got: {output}";
+    assert "hex_escape_first_ord:27" in output , f"Expected ESC char (27), got: {output}";
+
+    # Test 2: octal \033 distinct parsing path → same ESC result
+    assert "octal_escape_len:5" in output , f"Expected octal escape len 5, got: {output}";
+    assert "octal_escape_first_ord:27" in output , f"Expected ESC char (27), got: {output}";
+
+    # Test 3: \x1b in f-string (JoinedStr AST node - different code path)
+    assert "fstring_hex_first_ord:27" in output , f"F-string hex escape failed: {output}";
+
+    # Test 5: standard escapes \n=10, \t=9, \r=13
+    assert "newline_ord:10" in output , f"Newline escape failed: {output}";
+    assert "tab_ord:9" in output , f"Tab escape failed: {output}";
+    assert "carriage_ord:13" in output , f"Carriage return escape failed: {output}";
+
+    # Test 7: escaped backslash \\x1b → literal \ (ord 92), NOT ESC
+    assert "escaped_backslash_first_ord:92" in output , f"Escaped backslash failed: {output}";
+
+    # Test 9: unicode \u001b → ESC (third distinct escape syntax)
+    assert "unicode_escape_first_ord:27" in output , f"Unicode escape failed: {output}";
 }

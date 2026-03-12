@@ -8,11 +8,16 @@ impl DeclImplMatchPass.transform(
     self.connect_impls(ir_in.sym_tab, ir_in.sym_tab);
     for impl_module in ir_in.impl_mod {
         self.connect_impls(impl_module.sym_tab, ir_in.sym_tab);
+        # Set impl module's parent_scope to main module for import visibility.
+        # This ensures impl files can access imports from their parent .jac file.
+        impl_module.parent_scope = ir_in;
     }
     for variant_module in ir_in.variant_mod {
         self.connect_impls(variant_module.sym_tab, variant_module.sym_tab);
         for impl_module in variant_module.impl_mod {
             self.connect_impls(impl_module.sym_tab, variant_module.sym_tab);
+            # Set impl module's parent_scope to variant module for import visibility.
+            impl_module.parent_scope = variant_module;
         }
     }
     # Cross-variant: head impl files may provide impls for variant decls.
@@ -104,7 +109,7 @@ impl DeclImplMatchPass.connect_impls(
         ) {
             raise self.ice(
                 f"Expected AstImplNeedingNode, got {valid_decl.__class__.__name__}. Not possible."
-            ) ;
+            );
         }
         self.validate_params_match(sym, decl_node.name_of);
         valid_decl.body = sym.decl.name_of;
@@ -121,12 +126,6 @@ impl DeclImplMatchPass.connect_impls(
             valid_decl.sym_tab.names_in_scope
         );
         valid_decl.sym_tab.names_in_scope = sym.decl.name_of.sym_tab.names_in_scope;
-        # Fix local vars in impl that shadow typed variables from the
-        # declaration's parent scope chain. During SymTabBuildPass, impl
-        # blocks aren't yet linked to their declarations, so assignments
-        # like `tasks = tasks + [task]` create untyped local var symbols
-        # that shadow `has tasks: list` from the parent scope.
-        self._fix_shadowed_parent_symbols(sym.decl.name_of, valid_decl);
         self._resolve_impl_body_symbols(sym.decl.name_of);
         # Populate self-member symbols from impl to archetype for method impls
         # (e.g., impl Foo.init { self.x = 1; } should add 'x' to Foo's symbol table)
@@ -179,10 +178,7 @@ impl DeclImplMatchPass.validate_params_match(
             );
         } elif (params_decl and params_defn) {
             for idx in range(len(params_defn)) {
-                if ((par := params_decl[idx].parent) is not None) {
-                    loc_in_kid = par.kid.index(params_decl[idx]);
-                    par.kid[loc_in_kid] = params_defn[idx];
-                }
+                # Update params list only; keep decl's kid intact for hover/go-to-def.
                 params_decl[idx] = params_defn[idx];
             }
         }
@@ -220,47 +216,6 @@ impl DeclImplMatchPass._resolve_impl_body_symbols(
     }
 }
 
-"""Fix local vars in impl that shadow typed variables from the declaration's parent scope."""
-impl DeclImplMatchPass._fix_shadowed_parent_symbols(
-    self: DeclImplMatchPass, impl_def: uni.ImplDef, valid_decl: uni.AstImplNeedingNode
-) -> None {
-    import from jaclang.jac0core.passes.sym_tab_build_pass { SymTabBuildPass }
-    if not (valid_decl.sym_tab and valid_decl.sym_tab.parent_scope) {
-        return;
-    }
-    parent_scope = valid_decl.sym_tab.parent_scope;
-    merged = impl_def.sym_tab.names_in_scope;
-    # Collect shadowed names and their parent symbols in one pass.
-    fixes: dict[str, Symbol] = {};
-    for (name, sym) in merged.items() {
-        if (
-            sym.decl
-            and sym.decl.name_of
-            and isinstance(sym.decl.name_of, uni.Name)
-            and not isinstance(sym.decl.name_of, (uni.HasVar, uni.ParamVar))
-        ) {
-            parent_sym = parent_scope.lookup(name, deep=True, incl_inner_scope=False);
-            if (parent_sym and SymTabBuildPass._outer_has_type_annotation(parent_sym)) {
-                fixes[name] = parent_sym;
-            }
-        }
-    }
-    if not fixes {
-        return;
-    }
-    # Replace scope entries.
-    for (name, parent_sym) in fixes.items() {
-        merged[name] = parent_sym;
-    }
-    # Re-link Name nodes in one traversal of the impl body.
-    for name_node in impl_def.get_all_sub_nodes(uni.Name) {
-        if ((name_node.sym is not None) and (name_node.value in fixes)) {
-            parent_sym = fixes[name_node.value];
-            name_node.sym = parent_sym;
-            parent_sym.add_use(name_node.name_spec);
-        }
-    }
-}
 
 """Populate self-member symbols from impl body to archetype's symbol table."""
 impl DeclImplMatchPass._populate_self_member_symbols(
@@ -284,6 +239,12 @@ impl DeclImplMatchPass._populate_self_member_symbols(
         attr_name = chain[1];
         # Skip if already defined in the archetype
         if archetype.sym_tab.lookup(attr_name.sym_name, deep=False) is not None {
+            continue;
+        }
+        # Only allow dynamic self.attr = value for class archetypes (Python-style).
+        # obj/node/edge/walker have fixed schemas declared via 'has' —
+        # undeclared attrs will be caught by the type checker's "has no attribute" diagnostic.
+        if archetype.arch_type.name != 'KW_CLASS' {
             continue;
         }
         archetype.sym_tab.def_insert(attr_name, access_spec=archetype);

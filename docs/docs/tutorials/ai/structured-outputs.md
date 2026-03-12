@@ -1,6 +1,8 @@
 # Structured Outputs
 
-Get type-safe responses from LLMs with enums, objects, and lists.
+One of the most powerful aspects of byLLM is that your `by llm()` functions aren't limited to returning strings. You can return enums, objects, lists, nested structures -- any Jac type -- and byLLM will validate that the LLM's response matches your declared type. This turns LLMs from text generators into reliable data extractors and classifiers that integrate cleanly into typed code.
+
+This tutorial covers returning enums (fixed choices), objects (structured records), lists, nested types, and optional fields from LLM calls -- all with automatic type validation.
 
 > **Prerequisites**
 >
@@ -11,7 +13,9 @@ Get type-safe responses from LLMs with enums, objects, and lists.
 
 ## Why Structured Outputs?
 
-Traditional LLM calls return strings that you must parse manually. byLLM returns proper typed objects:
+The fundamental problem with raw LLM calls is unpredictable output format. Ask an LLM "What's the sentiment?" and you might get `"positive"`, `"POSITIVE"`, `"The sentiment is positive"`, or a paragraph of explanation. Parsing these inconsistent strings into usable data requires fragile regex or string matching.
+
+byLLM solves this by using your return type annotation as a contract. When you declare `-> Sentiment`, byLLM constrains the LLM's output to valid enum values and returns a proper typed object -- no parsing required:
 
 ```
 # Traditional: Returns string, you parse it
@@ -311,7 +315,12 @@ node Ticket {
 }
 
 def analyze_priority(title: str, description: str) -> Priority by llm();
+```
 
+!!! warning "Graph Persistence"
+    Walker examples use persistent graph state. Run `jac clean --all` before re-running to avoid `NodeAnchor` errors.
+
+```jac
 walker PrioritizeTickets {
     can with Root entry { visit [-->]; }
 
@@ -376,4 +385,3 @@ If the LLM returns invalid types, byLLM will:
 
 - [Agentic AI](agentic.md) - Add tools for the LLM to use
 - [byLLM Reference](../../reference/plugins/byllm.md) - Complete documentation
-- [Examples Gallery](../examples/index.md) - See structured outputs in action

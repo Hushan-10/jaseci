@@ -1,5 +1,7 @@
 # Appendices
 
+Use these appendices when you need to look up a specific keyword, operator, or syntax rule. You'll also find a migration guide for Python developers and a provider configuration reference for byLLM.
+
 **In this part:**
 
 - [Appendix A: Complete Keyword Reference](#appendix-a-complete-keyword-reference) - All keywords
@@ -15,7 +17,7 @@
 
 | Keyword | Category | Description |
 |---------|----------|-------------|
-| `abs` | Modifier | Abstract method/class (note: NOT `abstract`) |
+| `abs` | Modifier | Abstract ability declaration (postfix, e.g., `def area() -> float abs;`) |
 | `and` | Operator | Logical AND (also `&&`) |
 | `as` | Import | Alias |
 | `assert` | Statement | Assertion |
@@ -73,6 +75,7 @@
 | `return` | Statement | Return value |
 | `root` | OSP | Root node reference |
 | `self` | Reference | Current instance |
+| `Self` | Type | Enclosing archetype type (used in `class def` and type annotations) |
 | `sem` | Declaration | Semantic string |
 | `skip` | Control | Skip (nested context) |
 | `spawn` | OSP | Spawn walker |
@@ -95,6 +98,7 @@
 - The abstract keyword is `abs`, not `abstract`
 - Logical operators have both word and symbol forms: `and`/`&&`, `or`/`||`
 - `cl`, `sv`, and `na` are block keywords for client/server/native code separation
+- **Special variable references** (`self`, `Self`, `super`, `root`, `here`, `visitor`, `init`, `postinit`) are used directly without backtick escaping -- they are built-in references, not identifiers. `self` refers to the current instance; `Self` refers to the enclosing type (see [Class Methods](../language/functions-objects.md#6-static-methods-and-class-methods)). Only use backtick escaping when repurposing other keywords as regular identifiers (e.g., `` `type `` as a field name).
 
 ---
 
@@ -271,9 +275,10 @@ walker Example {
 
 ### 6. `report` vs `return`
 
+<!-- jac-skip -->
 ```jac
 walker Example {
-    can collect with Node entry {
+    can collect with Node entry -> object {
         report here.value;  # Continues execution
         visit [-->];        # Still runs
 
@@ -495,9 +500,9 @@ For a step-by-step transition guide, see [Jac Basics Tutorial](../../tutorials/l
 
 | Provider | Model Names | Environment Variable |
 |----------|-------------|---------------------|
-| OpenAI | `gpt-4`, `gpt-4o`, `gpt-3.5-turbo` | `OPENAI_API_KEY` |
-| Anthropic | `claude-3-opus`, `claude-3-sonnet` | `ANTHROPIC_API_KEY` |
-| Google | `gemini-pro`, `gemini-ultra` | `GOOGLE_API_KEY` |
+| OpenAI | `gpt-4`, `gpt-4o`, `gpt-4-turbo`, `gpt-3.5-turbo`, `o1`, `o3-mini` | `OPENAI_API_KEY` |
+| Anthropic | `claude-3-opus`, `claude-3-sonnet`, `claude-sonnet-4-6`, `claude-opus-4`, `claude-haiku-4-5` | `ANTHROPIC_API_KEY` |
+| Google | `gemini-pro`, `gemini-ultra`, `gemini-1.5-pro`, `gemini-2.0-flash` | `GOOGLE_API_KEY` |
 | Azure | `azure/gpt-4` | Azure config |
 | Ollama | `ollama/llama2`, `ollama/mistral` | Local (no key) |
 

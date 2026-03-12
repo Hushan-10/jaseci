@@ -1,6 +1,8 @@
 # Backend Integration
 
-Connect your frontend components to Jac walkers for data fetching and mutations.
+The real power of Jac's full-stack model is how seamlessly client components connect to server logic. Instead of manually defining REST endpoints, writing fetch calls, and parsing JSON, you simply call server-side functions or spawn walkers from your client code -- the compiler generates the HTTP layer automatically. Data goes from your graph through walkers, over the network, and into your React-style components with minimal boilerplate.
+
+This tutorial shows how to call backend functions from the frontend, use walkers for graph-based data operations, handle loading states, and structure your server-client communication.
 
 > **Prerequisites**
 >
@@ -12,7 +14,7 @@ Connect your frontend components to Jac walkers for data fetching and mutations.
 
 ## How It Works
 
-In Jac full-stack apps:
+In Jac full-stack apps, the compiler handles the client-server boundary for you. Here's the mental model:
 
 1. **Backend** = Functions or walkers that process data and return results
 2. **Frontend** = Components in `cl { }` blocks
@@ -244,7 +246,7 @@ cl {
                 <input
                     value={new_title}
                     onChange={lambda e: any -> None { new_title = e.target.value; }}
-                    onKeyPress={lambda e: any -> None {
+                    onKeyDown={lambda e: any -> None {
                         if e.key == "Enter" { handle_add(); }
                     }}
                     placeholder="New task..."
@@ -502,7 +504,7 @@ cl {
                 <input
                     value={input_text}
                     onChange={lambda e: any -> None { input_text = e.target.value; }}
-                    onKeyPress={lambda e: any -> None {
+                    onKeyDown={lambda e: any -> None {
                         if e.key == "Enter" { add(); }
                     }}
                     placeholder="Add a task..."

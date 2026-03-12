@@ -37,6 +37,9 @@ import from jaclang.cli.banners { JAC_DISCORD_URL }
 import from fastapi { WebSocket, WebSocketDisconnect }
 import from jac_scale.admin.admin_portal { JacAPIServerAdmin }
 import from jac_scale.enums { Platforms, Operations }
+import from jac_scale.scheduler { JacScaleScheduler }
+import from jaclang.runtimelib.builtin { ScheduleTrigger }
+import from jaclang.jac0core.constant { Constants as Con }
 
 # Load configuration from jac.toml with env var overrides
 glob _jwt_config = get_scale_config().get_jwt_config(),
@@ -45,7 +48,16 @@ glob _jwt_config = get_scale_config().get_jwt_config(),
      JWT_ALGORITHM = _jwt_config['algorithm'],
      JWT_EXP_DELTA_DAYS = _jwt_config['exp_delta_days'],
      SSO_HOST = _sso_config['host'],
-     logger = logging.getLogger(__name__);
+     logger = logging.getLogger(__name__),
+     PORT_RETRY_LIMIT: int = 10,
+     ERRNO_ADDR_IN_USE_LINUX: int = 98,
+     ERRNO_ADDR_IN_USE_WINDOWS: int = 10048;
+
+"""Find an available port starting from the given port."""
+def _find_available_port(start_port: int, max_retries: int = PORT_RETRY_LIMIT) -> int;
+
+"""Get local network IP addresses (non-localhost)."""
+def _get_network_ips -> list[str];
 
 """Core auth, user management, JWT, API keys, server start/postinit."""
 obj JacAPIServerCore {
@@ -53,10 +65,11 @@ obj JacAPIServerCore {
     def start(
         dev: bool = False,
         no_client: bool = False,
-        on_ready: Callable[[], None] | None = None
+        on_ready: Callable[..., None] | None = None
     ) -> None;
 
     def _configure_openapi_security -> None;
+    def _print_startup_banner(dev: bool, no_client: bool) -> None;
     # User/Auth endpoints
     def login(username: str, password: str) -> TransportResponse;
     def register_login_endpoint -> None;
@@ -81,6 +94,7 @@ obj JacAPIServerCore {
     def _create_sso_callback_wrapper -> Callable[..., (Response | TransportResponse)];
     # HMR support
     def enable_hmr(hot_reloader: Any) -> None;
+    def _setup_scheduler -> None;
     # API key management
     def get_api_key_manager -> ApiKeyManager;
     def create_api_key(
@@ -93,6 +107,10 @@ obj JacAPIServerCore {
     ) -> TransportResponse;
 
     def register_api_key_endpoints -> None;
+    # Metrics endpoint wrapper for admin-only access
+    def _create_admin_metrics_handler(
+        original_handler: Callable[..., Any]
+    ) -> Callable[..., Any];
 }
 
 """Walker, function, webhook, WebSocket endpoint registration and callbacks."""
@@ -134,6 +152,16 @@ obj JacAPIServerEndpoints {
     def register_dynamic_websocket_endpoint -> None;
 }
 
+"""Scheduler job management REST API endpoints."""
+obj JacAPIServerScheduler {
+    def register_scheduler_endpoints -> None;
+    def create_job_callback -> Callable[..., TransportResponse];
+    def list_jobs_callback -> Callable[..., TransportResponse];
+    def get_job_callback -> Callable[..., TransportResponse];
+    def update_job_callback -> Callable[..., TransportResponse];
+    def delete_job_callback -> Callable[..., TransportResponse];
+}
+
 """Static files, pages, client JS, graph visualization."""
 obj JacAPIServerStatic {
     # Static file serving
@@ -155,7 +183,7 @@ obj JacAPIServerStatic {
 }
 
 """Composed JacAPIServer class combining all mixins with JServer base."""
-obj JacAPIServer(JacAPIServerCore, JacAPIServerEndpoints, JacAPIServerStatic, JacAPIServerAdmin, JServer) {
+obj JacAPIServer(JacAPIServerCore, JacAPIServerEndpoints, JacAPIServerStatic, JacAPIServerAdmin, JacAPIServerScheduler, JServer) {
     # HMR (Hot Module Replacement) support fields
     has _hmr_pending: bool = False,
         _hot_reloader: Any | None = None,

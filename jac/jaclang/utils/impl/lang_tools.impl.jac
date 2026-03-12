@@ -162,7 +162,7 @@ impl AstTool.ir(args: list[str]) -> str {
 
 """List python ast nodes."""
 impl AstTool.py_uni_nodes -> str {
-    import from jaclang.compiler.passes.main { PyastBuildPass }
+    import from jaclang.compiler.passes.main.pyast_load_pass { PyastBuildPass }
     visit_methods = [
         method
         for method in dir(py_ast._Unparser)
@@ -198,7 +198,7 @@ impl AstTool.pass_template -> str {
     output = 'import jaclang.jac0core.unitree as ast\nfrom jaclang.jac0core.passes import Pass\n\nclass SomePass(Pass):\n';
     """Emit to output.""";
     def emit(to_append: str) -> None {
-        nonlocal output ;
+        nonlocal output;
         output += '\n    ' + to_append;
     }
     for cls in self.ast_classes {
