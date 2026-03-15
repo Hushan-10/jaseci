@@ -13,5 +13,15 @@ glob _agent_callbacks: list = [],
 """Register a callback to receive agent invocation completion events."""
 def:pub register_agent_callback(callback: Callable) -> None;
 
-"""Emit an agent-level telemetry record to all registered callbacks."""
-def _emit_agent_telemetry(record: dict) -> None;
+"""Extract telemetry data from mt_run and emit to all registered callbacks.
+
+Owns all extraction logic — Model.invoke only passes mt_run through.
+"""
+def _emit_agent_telemetry(
+    mt_run: object,
+    result: object,
+    model_name: str,
+    latency_ms: float,
+    status: str,
+    error: Exception | None
+) -> None;

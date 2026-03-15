@@ -4,7 +4,6 @@ import threading;
 import time;
 import uuid;
 import from collections { OrderedDict }
-import from dataclasses { dataclass, field }
 import from typing { Any }
 import from fastapi { Request }
 import from fastapi.responses { JSONResponse }
@@ -21,8 +20,7 @@ import json as json_module;
 glob logger = logging.getLogger(__name__);
 
 
-@dataclass
-class LLMCallRecord {
+obj LLMCallRecord {
     """Record for a single LLM API call within an agent invocation."""
     has call_id: str | None = None,
         model: str | None = None,
@@ -37,7 +35,7 @@ class LLMCallRecord {
         response: Any = None,
         timestamp: float = 0;
 
-    def to_dict(self: LLMCallRecord) -> dict {
+    def to_dict -> dict {
         # Safely serialize messages and response (may contain non-JSON-serializable objects)
         safe_messages = self.messages;
         try {
@@ -69,27 +67,26 @@ class LLMCallRecord {
 }
 
 
-@dataclass
-class Trace {
+obj Trace {
     """A complete agent invocation trace with correlated LLM calls."""
     has invocation_id: str = "",
         caller_name: str = "unknown",
-        caller_args: dict = field(default_factory=dict),
+        caller_args: dict = {},
         model: str = "unknown",
         user_prompt: str = "",
         agent_response: str = "",
-        conversation_history: list = field(default_factory=list),
+        conversation_history: list = [],
         total_latency_ms: float = 0,
         total_tokens: int = 0,
         total_cost: float = 0.0,
         llm_call_count: int = 0,
-        llm_calls: list = field(default_factory=list),
+        llm_calls: list = [],
         status: str = "in_progress",
         error: str | None = None,
         completed: bool = False,
         timestamp: float = 0;
 
-    def to_dict(self: Trace, include_detail: bool = False) -> dict {
+    def to_dict(include_detail: bool = False) -> dict {
         result = {
             "invocation_id": self.invocation_id,
             "caller_name": self.caller_name,
@@ -125,17 +122,20 @@ class Trace {
 }
 
 
-class TelemetryStore {
+obj TelemetryStore {
     """Thread-safe in-memory telemetry store with trace correlation."""
-    def init(self: TelemetryStore, max_traces: int = 1000) -> None {
+    has max_traces: int = 1000,
+        _lock: Any = None,
+        _traces: Any = None;
+
+    def postinit -> None {
         self._lock = threading.Lock();
-        self._traces: OrderedDict = OrderedDict();
-        self._max_traces = max_traces;
+        self._traces = OrderedDict();
     }
 
     # Called by JacLLMLogger for each individual LLM API call.
     # Creates/updates a Trace based on invocation_id in metadata.
-    def record_llm_event(self: TelemetryStore, event: dict) -> None {
+    def record_llm_event(event: dict) -> None {
         with self._lock {
             metadata = event.get("metadata", {}) or {};
             inv_id = metadata.get("jac_invocation_id") or str(uuid.uuid4());
@@ -181,14 +181,14 @@ class TelemetryStore {
             trace.total_cost += call_record.response_cost;
             trace.llm_call_count += 1;
             # Evict oldest traces if over capacity
-            while len(self._traces) > self._max_traces {
+            while len(self._traces) > self.max_traces {
                 self._traces.popitem(last=False);
             }
         }
     }
 
     # Called by byllm agent callback. Finalizes the Trace with agent-level data.
-    def record_agent_completion(self: TelemetryStore, record: dict) -> None {
+    def record_agent_completion(record: dict) -> None {
         with self._lock {
             inv_id = record.get("invocation_id");
             if inv_id and inv_id in self._traces {
@@ -225,7 +225,7 @@ class TelemetryStore {
                     timestamp=time.time()
                 );
                 # Evict oldest traces if over capacity
-                while len(self._traces) > self._max_traces {
+                while len(self._traces) > self.max_traces {
                     self._traces.popitem(last=False);
                 }
             }
@@ -234,7 +234,7 @@ class TelemetryStore {
 
     # Backfill agent_response for streaming traces from the last LLM call's response.
     # byllm contract: tool-based agents ALWAYS end with finish_tool(final_output=...).
-    def _backfill_streaming_response(self: TelemetryStore, trace: Trace) -> None {
+    def _backfill_streaming_response(trace: Trace) -> None {
         if trace.agent_response != "[streaming]" or not trace.llm_calls {
             return;
         }
@@ -283,7 +283,6 @@ class TelemetryStore {
     }
 
     def get_traces(
-        self: TelemetryStore,
         limit: int = 50,
         offset: int = 0,
         model: str | None = None,
@@ -330,7 +329,7 @@ class TelemetryStore {
     }
 
     # Single trace with full detail (conversation history, all LLM calls).
-    def get_trace(self: TelemetryStore, invocation_id: str) -> dict | None {
+    def get_trace(invocation_id: str) -> dict | None {
         with self._lock {
             trace = self._traces.get(invocation_id);
             if trace {
@@ -342,7 +341,7 @@ class TelemetryStore {
     }
 
     # Aggregate stats across all traces.
-    def get_summary(self: TelemetryStore) -> dict {
+    def get_summary -> dict {
         with self._lock {
             traces_list = list(self._traces.values());
             if not traces_list {
@@ -421,7 +420,7 @@ class TelemetryStore {
     }
 
     # Return unique model names, callers, and statuses for filter dropdowns.
-    def get_available_filters(self: TelemetryStore) -> dict {
+    def get_available_filters -> dict {
         with self._lock {
             models = list(
                 set(

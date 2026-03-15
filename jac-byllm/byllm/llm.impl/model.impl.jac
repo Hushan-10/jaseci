@@ -29,126 +29,31 @@ impl Model.postinit -> None {
 
 """Invoke the LLM, delegating to MockLLM if applicable.
 
-Wraps the full invocation (including ReAct loop) with telemetry.
-Generates a unique invocation_id shared across all LLM calls in
-this agent invocation via make_model_params metadata.
+Wraps the full invocation with telemetry. Sets a unique invocation_id
+on mt_run, then delegates all telemetry extraction to _emit_agent_telemetry.
 """
 impl Model.invoke(mt_run: MTRuntime) -> object {
     import uuid;
     import time;
 
-    # Generate a unique ID for this entire agent invocation
-    # (shared across all LLM calls in the ReAct loop via make_model_params metadata)
     mt_run._invocation_id = str(uuid.uuid4());
     _start = time.time();
 
-    # Extract telemetry context before the LLM call — available for both success and error paths
-    user_prompt = "";
     try {
-        user_prompt = str(mt_run.messages[1].content[0].text)[:2000];
-    } except Exception as e {
-        logging.getLogger("byllm.telemetry").debug(
-            f"user_prompt extraction failed: {e}"
-        );
-    }
-    caller_args: dict = {};
-    try {
-        if mt_run.mtir and mt_run.mtir.args {
-            for k in mt_run.mtir.args {
-                caller_args[str(k)] = str(mt_run.mtir.args[k])[:500];
-            }
-        }
-    } except Exception as e {
-        logging.getLogger("byllm.telemetry").debug(
-            f"caller_args extraction failed: {e}"
-        );
-    }
-    conv_history: list = [];
-    try {
-        conv_history = mt_run.get_msg_list();
-    } except Exception as e {
-        logging.getLogger("byllm.telemetry").debug(
-            f"conv_history extraction failed: {e}"
-        );
-    }
+        result = self._mock_delegate.invoke(mt_run)
+            if self._mock_delegate
+            else super.invoke(mt_run);
 
-    try {
-        # Delegate to mock or real LLM — existing logic, untouched
-        if self._mock_delegate {
-            result = self._mock_delegate.invoke(mt_run);
-        } else {
-            result = super.invoke(mt_run);
-        }
-
-        # Emit agent-level telemetry on success (fire-and-forget)
-        try {
-            import from byllm.telemetry { _emit_agent_telemetry }
-            # Extract the real agent response text
-            import types as _types_mod;
-            _agent_resp = "";
-            if isinstance(result, _types_mod.GeneratorType) {
-                # Streaming: response not yet generated at this point
-                _agent_resp = "[streaming]";
-            } else {
-                # Non-streaming: use the parsed result directly
-                _agent_resp = str(result)[:2000];
-            }
-            # Re-capture conversation history after LLM call (may have new messages)
-            try {
-                conv_history = mt_run.get_msg_list();
-            } except Exception as e {
-                logging.getLogger("byllm.telemetry").debug(
-                    f"post-call conv_history refresh failed: {e}"
-                );
-            }
-            _emit_agent_telemetry(
-                {
-                    "invocation_id": mt_run._invocation_id,
-                    "caller_name": mt_run.mtir.caller.__name__
-                        if mt_run.mtir
-                        else "unknown",
-                    "caller_args": caller_args,
-                    "user_prompt": user_prompt,
-                    "agent_response": _agent_resp,
-                    "conversation_history": conv_history,
-                    "model": self.model_name,
-                    "latency_ms": (time.time() - _start) * 1000,
-                    "status": "success",
-                    "error": None
-                }
-            );
-        } except Exception as _te {
-            logging.getLogger("byllm.telemetry").warning(
-                f"Agent telemetry emit failed: {_te}"
-            );
-        }
-
+        _emit_agent_telemetry(
+            mt_run, result, self.model_name,
+            (time.time() - _start) * 1000, "success", None
+        );
         return result;
     } except Exception as e {
-        # Emit failure telemetry
-        try {
-            import from byllm.telemetry { _emit_agent_telemetry }
-            _emit_agent_telemetry(
-                {
-                    "invocation_id": mt_run._invocation_id,
-                    "caller_name": mt_run.mtir.caller.__name__
-                        if mt_run.mtir
-                        else "unknown",
-                    "caller_args": caller_args,
-                    "user_prompt": user_prompt,
-                    "agent_response": "",
-                    "conversation_history": conv_history,
-                    "model": self.model_name,
-                    "latency_ms": (time.time() - _start) * 1000,
-                    "status": "error",
-                    "error": str(e)[:1000]
-                }
-            );
-        } except Exception as e {
-            logging.getLogger("byllm.telemetry").debug(
-                f"Error-path telemetry emit failed: {e}"
-            );
-        }
+        _emit_agent_telemetry(
+            mt_run, None, self.model_name,
+            (time.time() - _start) * 1000, "error", e
+        );
         raise;
     }
 }
