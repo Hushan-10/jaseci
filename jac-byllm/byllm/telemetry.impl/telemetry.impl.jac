@@ -57,9 +57,7 @@ impl _emit_agent_telemetry(
     # --- Build the telemetry record ---
     record = {
         "invocation_id": mt_run._invocation_id,
-        "caller_name": mt_run.mtir.caller.__name__
-            if mt_run.mtir
-            else "unknown",
+        "caller_name": mt_run.mtir.caller.__name__ if mt_run.mtir else "unknown",
         "caller_args": caller_args,
         "user_prompt": user_prompt,
         "agent_response": agent_response,

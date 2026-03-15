@@ -45,14 +45,17 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
             else super.invoke(mt_run);
 
         _emit_agent_telemetry(
-            mt_run, result, self.model_name,
-            (time.time() - _start) * 1000, "success", None
+            mt_run,
+            result,
+            self.model_name,
+            (time.time() - _start) * 1000,
+            "success",
+            None
         );
         return result;
     } except Exception as e {
         _emit_agent_telemetry(
-            mt_run, None, self.model_name,
-            (time.time() - _start) * 1000, "error", e
+            mt_run, None, self.model_name, (time.time() - _start) * 1000, "error", e
         );
         raise;
     }
