@@ -9,7 +9,6 @@ import from byllm.telemetry {
 }
 
 #  Helpers
-
 """Build a fake mt_run via types.SimpleNamespace (same pattern as test_byllm.jac)."""
 def make_fake_mt_run(
     invocation_id: str = "inv-test-001",
@@ -28,7 +27,8 @@ def make_fake_mt_run(
     mtir = types.SimpleNamespace(caller=caller, args=args);
 
     # mt_run.get_msg_list() — used for conversation_history
-    history = msg_list or [
+    history = msg_list
+    or [
         {"role": "system", "content": "You are a math expert."},
         {"role": "user", "content": user_prompt}
     ];
@@ -37,14 +37,13 @@ def make_fake_mt_run(
         _invocation_id=invocation_id,
         messages=[types.SimpleNamespace(), msg1],
         mtir=mtir,
-        get_msg_list=lambda: history
+        get_msg_list=lambda : history
     );
 
     return mt;
 }
 
 #  1. register_agent_callback — deduplication
-
 test "register_agent_callback adds callback to registry" {
     original = _agent_callbacks.copy();
     _agent_callbacks.clear();
@@ -67,7 +66,9 @@ test "register_agent_callback deduplicates same callback" {
         register_agent_callback(cb);
         register_agent_callback(cb);  # Register again — should be ignored
         register_agent_callback(cb);  # Third time — still ignored
-        assert len(_agent_callbacks) == 1, f"Expected 1 callback, got {len(_agent_callbacks)}";
+        assert len(_agent_callbacks) == 1 , f"Expected 1 callback, got {len(
+            _agent_callbacks
+        )}";
     } finally {
         _agent_callbacks.clear();
         _agent_callbacks.extend(original);
@@ -90,7 +91,6 @@ test "register_agent_callback allows different callbacks" {
 }
 
 #  2. _emit_agent_telemetry — record field extraction
-
 test "emit_agent_telemetry builds record with correct fields" {
     original = _agent_callbacks.copy();
     _agent_callbacks.clear();
@@ -110,11 +110,11 @@ test "emit_agent_telemetry builds record with correct fields" {
 
         _emit_agent_telemetry(
             mt,
-            "Paris",          # result
-            "gpt-4o-mini",    # model_name
-            150.0,            # latency_ms
-            "success",        # status
-            None              # error
+            "Paris",  # result
+            "gpt-4o-mini",  # model_name
+            150.0,  # latency_ms
+            "success",  # status
+            None  # error
         );
 
         assert len(captured) == 1;
@@ -194,7 +194,6 @@ test "emit_agent_telemetry includes error string on failure" {
 }
 
 #  3. _emit_agent_telemetry — failing callback isolation
-
 test "failing callback does not prevent other callbacks from firing" {
     original = _agent_callbacks.copy();
     _agent_callbacks.clear();
@@ -227,10 +226,18 @@ test "multiple failing callbacks do not suppress any good callbacks" {
     _agent_callbacks.clear();
     results: list = [];
     try {
-        def bad1(record: dict) -> None { raise ValueError("bad1"); }
-        def good1(record: dict) -> None { results.append("good1"); }
-        def bad2(record: dict) -> None { raise TypeError("bad2"); }
-        def good2(record: dict) -> None { results.append("good2"); }
+        def bad1(record: dict) -> None {
+            raise ValueError("bad1");
+        }
+        def good1(record: dict) -> None {
+            results.append("good1");
+        }
+        def bad2(record: dict) -> None {
+            raise TypeError("bad2");
+        }
+        def good2(record: dict) -> None {
+            results.append("good2");
+        }
 
         _agent_callbacks.append(bad1);
         _agent_callbacks.append(good1);
@@ -250,7 +257,6 @@ test "multiple failing callbacks do not suppress any good callbacks" {
 }
 
 #  4. _emit_agent_telemetry — graceful extraction failures
-
 test "emit handles missing mt_run fields gracefully" {
     original = _agent_callbacks.copy();
     _agent_callbacks.clear();
@@ -262,7 +268,7 @@ test "emit handles missing mt_run fields gracefully" {
         _agent_callbacks.append(capture_cb);
 
         # Minimal mt_run with empty messages and no mtir — SimpleNamespace, no MagicMock
-        def fail_get_msg_list() -> list {
+        def fail_get_msg_list -> list {
             raise Exception("no messages");
         }
         mt = types.SimpleNamespace(
