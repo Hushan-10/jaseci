@@ -134,7 +134,7 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
             "jac_caller_name": mt_run.mtir.caller.__name__ if mt_run.mtir else None,
 
         };
-    } except Exception { }
+    } except Exception as e { logger.debug(f"agent_metadata build failed: {e}"); }
 
     params = {
         "model": self.model_name,
