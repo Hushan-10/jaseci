@@ -4,14 +4,9 @@ All tests instantiate TelemetryStore directly
 """
 import time;
 import json;
-import from jac_scale.admin.llm_telemetry {
-    TelemetryStore,
-    LLMCallRecord,
-    Trace
-}
+import from jac_scale.admin.llm_telemetry { TelemetryStore, LLMCallRecord, Trace }
 
 #  Helpers
-
 """Build a minimal LLM event dict for record_llm_event."""
 def make_llm_event(
     inv_id: str = "inv-001",
@@ -36,15 +31,13 @@ def make_llm_event(
         "status": "success",
         "error_str": None,
         "startTime": time.time(),
-        "messages": messages or [
+        "messages": messages
+        or [
             {"role": "system", "content": "You are helpful."},
             {"role": "user", "content": "Hello"}
         ],
         "response": response or {"choices": [{"message": {"content": "Hi there"}}]},
-        "metadata": {
-            "jac_invocation_id": inv_id,
-            "jac_caller_name": caller_name
-        }
+        "metadata": {"jac_invocation_id": inv_id, "jac_caller_name": caller_name}
     };
 }
 
@@ -66,10 +59,8 @@ def make_agent_record(
         "caller_args": caller_args or {"name": "test"},
         "user_prompt": user_prompt,
         "agent_response": agent_response,
-        "conversation_history": conversation_history or [
-            {"role": "system", "content": "sys"},
-            {"role": "user", "content": "Hello"}
-        ],
+        "conversation_history": conversation_history
+        or [{"role": "system", "content": "sys"}, {"role": "user", "content": "Hello"}],
         "model": model,
         "latency_ms": latency_ms,
         "status": status,
@@ -78,7 +69,6 @@ def make_agent_record(
 }
 
 #  1. record_llm_event
-
 test "record_llm_event creates trace with correct fields" {
     store = TelemetryStore();
     event = make_llm_event(
@@ -108,17 +98,13 @@ test "record_llm_event accumulates multiple calls in same trace" {
     store = TelemetryStore();
 
     # First LLM call in the ReAct loop
-    store.record_llm_event(make_llm_event(
-        inv_id="inv-200",
-        total_tokens=100,
-        response_cost=0.0001
-    ));
+    store.record_llm_event(
+        make_llm_event(inv_id="inv-200", total_tokens=100, response_cost=0.0001)
+    );
     # Second LLM call (tool result → next turn)
-    store.record_llm_event(make_llm_event(
-        inv_id="inv-200",
-        total_tokens=80,
-        response_cost=0.00008
-    ));
+    store.record_llm_event(
+        make_llm_event(inv_id="inv-200", total_tokens=80, response_cost=0.00008)
+    );
 
     traces = store.get_traces();
     assert traces["total"] == 1;
@@ -161,19 +147,20 @@ test "record_llm_event truncates response over 10KB" {
 }
 
 #  2. record_agent_completion
-
 test "record_agent_completion finalizes existing trace" {
     store = TelemetryStore();
 
     # First: LLM call creates the trace
     store.record_llm_event(make_llm_event(inv_id="inv-300"));
     # Then: agent callback finalizes it
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-300",
-        caller_name="summarize",
-        user_prompt="Summarize this",
-        agent_response="Done."
-    ));
+    store.record_agent_completion(
+        make_agent_record(
+            inv_id="inv-300",
+            caller_name="summarize",
+            user_prompt="Summarize this",
+            agent_response="Done."
+        )
+    );
 
     trace = store.get_trace("inv-300");
     assert trace["completed"] is True;
@@ -187,11 +174,13 @@ test "record_agent_completion creates trace when no prior LLM calls (MockLLM pat
     store = TelemetryStore();
 
     # No record_llm_event first — simulates MockLLM or proxy
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-mock",
-        caller_name="mock_caller",
-        agent_response="mocked answer"
-    ));
+    store.record_agent_completion(
+        make_agent_record(
+            inv_id="inv-mock",
+            caller_name="mock_caller",
+            agent_response="mocked answer"
+        )
+    );
 
     traces = store.get_traces();
     assert traces["total"] == 1;
@@ -209,10 +198,9 @@ test "record_agent_completion caps conversation history at 40" {
 
     # Build 60-message conversation history
     big_history = [{"role": "user", "content": f"msg-{i}"} for i in range(60)];
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-cap",
-        conversation_history=big_history
-    ));
+    store.record_agent_completion(
+        make_agent_record(inv_id="inv-cap", conversation_history=big_history)
+    );
 
     detail = store.get_trace("inv-cap");
     history = detail["conversation_history"];
@@ -225,10 +213,9 @@ test "record_agent_completion caps conversation history at 40" {
 test "record_agent_completion caps history at 40 for MockLLM path too" {
     store = TelemetryStore();
     big_history = [{"role": "user", "content": f"m-{i}"} for i in range(50)];
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-cap2",
-        conversation_history=big_history
-    ));
+    store.record_agent_completion(
+        make_agent_record(inv_id="inv-cap2", conversation_history=big_history)
+    );
 
     detail = store.get_trace("inv-cap2");
     history = detail["conversation_history"];
@@ -236,7 +223,6 @@ test "record_agent_completion caps history at 40 for MockLLM path too" {
 }
 
 #  3. _backfill_streaming_response
-
 test "backfill streaming response with finish_tool in last call" {
     store = TelemetryStore();
 
@@ -244,26 +230,29 @@ test "backfill streaming response with finish_tool in last call" {
     event = make_llm_event(
         inv_id="inv-stream",
         response={
-            "choices": [{
-                "message": {
-                    "content": None,
-                    "tool_calls": [{
-                        "function": {
-                            "name": "finish_tool",
-                            "arguments": "{\"final_output\": \"Paris is the capital.\"}"
-                        }
-                    }]
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "finish_tool",
+                                    "arguments": "{\"final_output\": \"Paris is the capital.\"}"
+                                }
+                            }
+                        ]
+                    }
                 }
-            }]
+            ]
         }
     );
     store.record_llm_event(event);
 
     # Agent callback says [streaming]
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-stream",
-        agent_response="[streaming]"
-    ));
+    store.record_agent_completion(
+        make_agent_record(inv_id="inv-stream", agent_response="[streaming]")
+    );
 
     # get_traces triggers backfill
     traces = store.get_traces();
@@ -277,20 +266,16 @@ test "backfill streaming response with direct text content" {
     event = make_llm_event(
         inv_id="inv-stream2",
         response={
-            "choices": [{
-                "message": {
-                    "content": "Direct text answer",
-                    "tool_calls": None
-                }
-            }]
+            "choices": [
+                {"message": {"content": "Direct text answer", "tool_calls": None}}
+            ]
         }
     );
     store.record_llm_event(event);
 
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-stream2",
-        agent_response="[streaming]"
-    ));
+    store.record_agent_completion(
+        make_agent_record(inv_id="inv-stream2", agent_response="[streaming]")
+    );
 
     traces = store.get_traces();
     trace = traces["traces"][0];
@@ -301,10 +286,9 @@ test "backfill does nothing for non-streaming response" {
     store = TelemetryStore();
 
     store.record_llm_event(make_llm_event(inv_id="inv-normal"));
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-normal",
-        agent_response="Normal answer"
-    ));
+    store.record_agent_completion(
+        make_agent_record(inv_id="inv-normal", agent_response="Normal answer")
+    );
 
     traces = store.get_traces();
     trace = traces["traces"][0];
@@ -313,7 +297,6 @@ test "backfill does nothing for non-streaming response" {
 }
 
 #  4. get_traces / get_trace — pagination & filtering
-
 test "get_traces pagination with limit and offset" {
     store = TelemetryStore();
 
@@ -386,10 +369,12 @@ test "get_trace returns full detail with conversation_history and llm_calls" {
     store = TelemetryStore();
 
     store.record_llm_event(make_llm_event(inv_id="inv-detail"));
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-detail",
-        conversation_history=[{"role": "user", "content": "test"}]
-    ));
+    store.record_agent_completion(
+        make_agent_record(
+            inv_id="inv-detail",
+            conversation_history=[{"role": "user", "content": "test"}]
+        )
+    );
 
     detail = store.get_trace("inv-detail");
     assert detail is not None;
@@ -405,51 +390,47 @@ test "get_trace returns None for missing invocation_id" {
 }
 
 #  5. get_summary — aggregation math
-
 test "get_summary aggregates tokens cost and errors correctly" {
     store = TelemetryStore();
 
     # Trace 1: gpt-4o, success, 200 tokens, cost 0.001
-    store.record_llm_event(make_llm_event(
-        inv_id="inv-sum1",
-        model="gpt-4o",
-        total_tokens=200,
-        response_cost=0.001
-    ));
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-sum1",
-        model="gpt-4o",
-        status="success",
-        latency_ms=500.0
-    ));
+    store.record_llm_event(
+        make_llm_event(
+            inv_id="inv-sum1", model="gpt-4o", total_tokens=200, response_cost=0.001
+        )
+    );
+    store.record_agent_completion(
+        make_agent_record(
+            inv_id="inv-sum1", model="gpt-4o", status="success", latency_ms=500.0
+        )
+    );
 
     # Trace 2: gpt-4o-mini, error, 100 tokens, cost 0.0002
-    store.record_llm_event(make_llm_event(
-        inv_id="inv-sum2",
-        model="gpt-4o-mini",
-        total_tokens=100,
-        response_cost=0.0002
-    ));
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-sum2",
-        model="gpt-4o-mini",
-        status="error",
-        latency_ms=300.0
-    ));
+    store.record_llm_event(
+        make_llm_event(
+            inv_id="inv-sum2",
+            model="gpt-4o-mini",
+            total_tokens=100,
+            response_cost=0.0002
+        )
+    );
+    store.record_agent_completion(
+        make_agent_record(
+            inv_id="inv-sum2", model="gpt-4o-mini", status="error", latency_ms=300.0
+        )
+    );
 
     # Trace 3: gpt-4o, success, 150 tokens, cost 0.0005
-    store.record_llm_event(make_llm_event(
-        inv_id="inv-sum3",
-        model="gpt-4o",
-        total_tokens=150,
-        response_cost=0.0005
-    ));
-    store.record_agent_completion(make_agent_record(
-        inv_id="inv-sum3",
-        model="gpt-4o",
-        status="success",
-        latency_ms=400.0
-    ));
+    store.record_llm_event(
+        make_llm_event(
+            inv_id="inv-sum3", model="gpt-4o", total_tokens=150, response_cost=0.0005
+        )
+    );
+    store.record_agent_completion(
+        make_agent_record(
+            inv_id="inv-sum3", model="gpt-4o", status="success", latency_ms=400.0
+        )
+    );
 
     summary = store.get_summary();
     assert summary["total_invocations"] == 3;
@@ -485,7 +466,6 @@ test "get_summary returns zeros when store is empty" {
 }
 
 #  6. Eviction — max_traces boundary
-
 test "eviction removes oldest trace when max_traces exceeded via record_llm_event" {
     store = TelemetryStore(max_traces=2);
 
@@ -520,16 +500,25 @@ test "eviction removes oldest trace when max_traces exceeded via record_agent_co
 }
 
 #  7. get_available_filters
-
 test "get_available_filters returns unique models callers statuses" {
     store = TelemetryStore();
 
-    store.record_llm_event(make_llm_event(inv_id="f1", model="gpt-4o", caller_name="agent_a"));
-    store.record_llm_event(make_llm_event(inv_id="f2", model="gpt-4o-mini", caller_name="agent_b"));
-    store.record_llm_event(make_llm_event(inv_id="f3", model="gpt-4o", caller_name="agent_a"));
+    store.record_llm_event(
+        make_llm_event(inv_id="f1", model="gpt-4o", caller_name="agent_a")
+    );
+    store.record_llm_event(
+        make_llm_event(inv_id="f2", model="gpt-4o-mini", caller_name="agent_b")
+    );
+    store.record_llm_event(
+        make_llm_event(inv_id="f3", model="gpt-4o", caller_name="agent_a")
+    );
     # Pass matching caller_name so agent_completion doesn't overwrite it
-    store.record_agent_completion(make_agent_record(inv_id="f1", caller_name="agent_a", status="success"));
-    store.record_agent_completion(make_agent_record(inv_id="f2", caller_name="agent_b", status="error"));
+    store.record_agent_completion(
+        make_agent_record(inv_id="f1", caller_name="agent_a", status="success")
+    );
+    store.record_agent_completion(
+        make_agent_record(inv_id="f2", caller_name="agent_b", status="error")
+    );
 
     filters = store.get_available_filters();
     assert "gpt-4o" in filters["models"];
@@ -540,7 +529,6 @@ test "get_available_filters returns unique models callers statuses" {
 }
 
 #  8. REST Endpoint Tests — auth enforcement & response shape
-
 import uuid;
 import from jac_scale.tests.scale_test_client {
     ScaleTestClient,
@@ -551,7 +539,6 @@ import from jac_scale.tests.scale_test_client {
 glob DEFAULT_ADMIN_PASSWORD: str = "changeme";
 
 # --- Auth enforcement: all telemetry endpoints require admin token ---
-
 test "REST summary endpoint returns 403 without auth token" {
     client = make_client();
     try {
@@ -606,7 +593,6 @@ test "REST summary endpoint returns 403 with invalid token" {
 }
 
 # --- Response shape: empty store ---
-
 test "REST summary returns correct shape on empty store" {
     client = make_client();
     try {
@@ -637,8 +623,7 @@ test "REST traces returns correct shape on empty store" {
     try {
         token = client.admin_login();
         response = client.get(
-            "/admin/llm/telemetry/traces",
-            headers={"Authorization": f"Bearer {token}"}
+            "/admin/llm/telemetry/traces", headers={"Authorization": f"Bearer {token}"}
         );
         assert response.status_code == 200;
         body = response.json();
@@ -692,9 +677,8 @@ test "REST trace detail returns 404 for nonexistent trace" {
 }
 
 # --- Response shape: populated store ---
-
 """Access the TelemetryStore that the REST handlers use at runtime."""
-def get_telemetry_store() -> TelemetryStore | None {
+def get_telemetry_store -> TelemetryStore | None {
     import sys;
     mod = sys.modules.get("jac_scale.admin.llm_telemetry");
     if mod is not None {
@@ -709,14 +693,21 @@ test "REST summary returns populated data after telemetry events" {
         token = client.admin_login();
 
         store = get_telemetry_store();
-        assert store is not None, "TelemetryStore should be initialized";
+        assert store is not None , "TelemetryStore should be initialized";
 
-        store.record_llm_event(make_llm_event(
-            inv_id="rest-sum1", model="gpt-4o", total_tokens=200, response_cost=0.001
-        ));
-        store.record_agent_completion(make_agent_record(
-            inv_id="rest-sum1", model="gpt-4o", status="success", latency_ms=500.0
-        ));
+        store.record_llm_event(
+            make_llm_event(
+                inv_id="rest-sum1",
+                model="gpt-4o",
+                total_tokens=200,
+                response_cost=0.001
+            )
+        );
+        store.record_agent_completion(
+            make_agent_record(
+                inv_id="rest-sum1", model="gpt-4o", status="success", latency_ms=500.0
+            )
+        );
 
         response = client.get(
             "/admin/llm/telemetry/summary",
@@ -747,8 +738,7 @@ test "REST traces returns populated data and supports pagination" {
 
         # Get all
         response = client.get(
-            "/admin/llm/telemetry/traces",
-            headers={"Authorization": f"Bearer {token}"}
+            "/admin/llm/telemetry/traces", headers={"Authorization": f"Bearer {token}"}
         );
         assert response.status_code == 200;
         data = response.json()["data"];
@@ -777,11 +767,13 @@ test "REST trace detail returns full detail for existing trace" {
         assert store is not None;
 
         store.record_llm_event(make_llm_event(inv_id="rest-detail"));
-        store.record_agent_completion(make_agent_record(
-            inv_id="rest-detail",
-            user_prompt="Tell me about Paris",
-            agent_response="Paris is the capital of France."
-        ));
+        store.record_agent_completion(
+            make_agent_record(
+                inv_id="rest-detail",
+                user_prompt="Tell me about Paris",
+                agent_response="Paris is the capital of France."
+            )
+        );
 
         response = client.get(
             "/admin/llm/telemetry/traces/rest-detail",
@@ -808,10 +800,20 @@ test "REST filters returns populated filter values" {
         store = get_telemetry_store();
         assert store is not None;
 
-        store.record_llm_event(make_llm_event(inv_id="rest-f1", model="gpt-4o", caller_name="agent_x"));
-        store.record_llm_event(make_llm_event(inv_id="rest-f2", model="claude-3", caller_name="agent_y"));
-        store.record_agent_completion(make_agent_record(inv_id="rest-f1", caller_name="agent_x", status="success"));
-        store.record_agent_completion(make_agent_record(inv_id="rest-f2", caller_name="agent_y", status="error"));
+        store.record_llm_event(
+            make_llm_event(inv_id="rest-f1", model="gpt-4o", caller_name="agent_x")
+        );
+        store.record_llm_event(
+            make_llm_event(inv_id="rest-f2", model="claude-3", caller_name="agent_y")
+        );
+        store.record_agent_completion(
+            make_agent_record(
+                inv_id="rest-f1", caller_name="agent_x", status="success"
+            )
+        );
+        store.record_agent_completion(
+            make_agent_record(inv_id="rest-f2", caller_name="agent_y", status="error")
+        );
 
         response = client.get(
             "/admin/llm/telemetry/filters",
