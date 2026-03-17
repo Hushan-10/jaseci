@@ -234,6 +234,37 @@ test "supervisor routes to math agent with streaming" {
     with_byllm_server(_test);
 }
 
+test "supervisor routes to code agent with streaming" {
+    def _test(server: Popen, server_port: int, token: str) -> None {
+        code_payload = {"query": "Write a Python function to compute the Fibonacci sequence"};
+
+        try {
+            response_data = post_json(
+                server_port, "/walker/Supervisor", code_payload, token
+            );
+
+            if "reports" in response_data {
+                reports = response_data["reports"];
+                assert len(reports) > 0, "Should have at least one report";
+                agent_report = reports[0];
+                assert agent_report["agent"] == "CodeAgent",
+                    f"Expected CodeAgent, got {agent_report.get('agent')}";
+                assert len(agent_report["response"]) > 0, "Response should not be empty";
+                # CodeAgent uses stream=True, logging=True with ReAct pipeline.
+                # A correct response containing 'fibonacci' proves the full streaming chain worked.
+                assert "fibonacci" in agent_report["response"].lower(),
+                    f"Expected fibonacci in streamed response, got {agent_report['response']}";
+            } else {
+                assert len(response_data) > 0, "Response should not be empty";
+            }
+        } except HTTPError as exc {
+            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
+            pytest.fail(f"CodeAgent streaming test failed: {exc.code}\n{error_body}");
+        }
+    }
+    with_byllm_server(_test);
+}
+
 test "supervisor routes to research agent" {
     def _test(server: Popen, server_port: int, token: str) -> None {
         research_payload = {
