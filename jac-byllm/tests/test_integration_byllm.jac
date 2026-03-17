@@ -110,7 +110,7 @@ def post_json(port: int, path: str, payload: dict, token: str = "") -> dict {
         method="POST"
     );
     with urlopen(req, timeout=90) as resp {
-        assert resp.status == 200, f"Expected 200, got {resp.status}";
+        assert resp.status == 200 , f"Expected 200, got {resp.status}";
         body = json.loads(resp.read().decode());
         # Unwrap TransportResponse envelope if present
         if isinstance(body, dict) and "data" in body and "ok" in body {
@@ -128,8 +128,7 @@ def with_byllm_server(test_fn: callable) -> None {
     jac_cmd = get_jac_command();
 
     server = Popen(
-        [*jac_cmd, "start", "main.jac", "-p", str(server_port)],
-        cwd=fixture_path
+        [*jac_cmd, "start", "main.jac", "-p", str(server_port)], cwd=fixture_path
     );
 
     try {
@@ -153,11 +152,10 @@ def with_byllm_server(test_fn: callable) -> None {
 # ---------------------------------------------------------------------------
 # Server start test
 # ---------------------------------------------------------------------------
-
 test "server starts successfully" {
     def _test(server: Popen, server_port: int, token: str) -> None {
         # Verify server process is still alive
-        assert server.poll() is None, "Server should be running";
+        assert server.poll() is None , "Server should be running";
 
         # Verify port is still accepting connections
         try {
@@ -173,7 +171,6 @@ test "server starts successfully" {
 # ---------------------------------------------------------------------------
 # Walker endpoint tests
 # ---------------------------------------------------------------------------
-
 test "supervisor routes to concept agent" {
     def _test(server: Popen, server_port: int, token: str) -> None {
         concept_payload = {"query": "Explain machine learning in simple terms"};
@@ -185,13 +182,14 @@ test "supervisor routes to concept agent" {
 
             if "reports" in response_data {
                 reports = response_data["reports"];
-                assert len(reports) > 0, "Should have at least one report";
+                assert len(reports) > 0 , "Should have at least one report";
                 agent_report = reports[0];
-                assert agent_report["agent"] == "ConceptAgent",
-                    f"Expected ConceptAgent, got {agent_report.get('agent')}";
-                assert len(agent_report["response"]) > 0, "Response should not be empty";
+                assert agent_report["agent"] == "ConceptAgent" , f"Expected ConceptAgent, got {agent_report.get(
+                    'agent'
+                )}";
+                assert len(agent_report["response"]) > 0 , "Response should not be empty";
             } else {
-                assert len(response_data) > 0, "Response should not be empty";
+                assert len(response_data) > 0 , "Response should not be empty";
             }
         } except HTTPError as exc {
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
@@ -212,19 +210,21 @@ test "supervisor routes to math agent with streaming" {
 
             if "reports" in response_data {
                 reports = response_data["reports"];
-                assert len(reports) > 0, "Should have at least one report";
+                assert len(reports) > 0 , "Should have at least one report";
                 agent_report = reports[0];
-                assert agent_report["agent"] == "MathAgent",
-                    f"Expected MathAgent, got {agent_report.get('agent')}";
-                assert len(agent_report["response"]) > 0, "Response should not be empty";
+                assert agent_report["agent"] == "MathAgent" , f"Expected MathAgent, got {agent_report.get(
+                    'agent'
+                )}";
+                assert len(agent_report["response"]) > 0 , "Response should not be empty";
                 # MathAgent uses stream=True, logging=True — the handler
                 # iterates StreamEvent objects from the ReAct pipeline
                 # (tool_call → tool_result → steps_done → chunk).
                 # A correct "35.0" proves the full streaming chain worked.
-                assert "35" in agent_report["response"],
-                    f"Expected 35 in streamed response, got {agent_report['response']}";
+                assert "35" in agent_report["response"] , f"Expected 35 in streamed response, got {agent_report[
+                    'response'
+                ]}";
             } else {
-                assert len(response_data) > 0, "Response should not be empty";
+                assert len(response_data) > 0 , "Response should not be empty";
             }
         } except HTTPError as exc {
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
@@ -236,7 +236,9 @@ test "supervisor routes to math agent with streaming" {
 
 test "supervisor routes to code agent with streaming" {
     def _test(server: Popen, server_port: int, token: str) -> None {
-        code_payload = {"query": "Write a Python function to compute the Fibonacci sequence"};
+        code_payload = {
+            "query": "Write a Python function to compute the Fibonacci sequence"
+        };
 
         try {
             response_data = post_json(
@@ -245,17 +247,19 @@ test "supervisor routes to code agent with streaming" {
 
             if "reports" in response_data {
                 reports = response_data["reports"];
-                assert len(reports) > 0, "Should have at least one report";
+                assert len(reports) > 0 , "Should have at least one report";
                 agent_report = reports[0];
-                assert agent_report["agent"] == "CodeAgent",
-                    f"Expected CodeAgent, got {agent_report.get('agent')}";
-                assert len(agent_report["response"]) > 0, "Response should not be empty";
+                assert agent_report["agent"] == "CodeAgent" , f"Expected CodeAgent, got {agent_report.get(
+                    'agent'
+                )}";
+                assert len(agent_report["response"]) > 0 , "Response should not be empty";
                 # CodeAgent uses stream=True, logging=True with ReAct pipeline.
                 # A correct response containing 'fibonacci' proves the full streaming chain worked.
-                assert "fibonacci" in agent_report["response"].lower(),
-                    f"Expected fibonacci in streamed response, got {agent_report['response']}";
+                assert "fibonacci" in agent_report["response"].lower() , f"Expected fibonacci in streamed response, got {agent_report[
+                    'response'
+                ]}";
             } else {
-                assert len(response_data) > 0, "Response should not be empty";
+                assert len(response_data) > 0 , "Response should not be empty";
             }
         } except HTTPError as exc {
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
@@ -278,14 +282,15 @@ test "supervisor routes to research agent" {
 
             if "reports" in response_data {
                 reports = response_data["reports"];
-                assert len(reports) > 0, "Should have at least one report";
+                assert len(reports) > 0 , "Should have at least one report";
                 agent_report = reports[0];
-                assert agent_report["agent"] == "ResearchAgent",
-                    f"Expected ResearchAgent, got {agent_report.get('agent')}";
-                assert "summary" in agent_report, "Should have summary field";
-                assert len(agent_report["summary"]) > 0, "Summary should not be empty";
+                assert agent_report["agent"] == "ResearchAgent" , f"Expected ResearchAgent, got {agent_report.get(
+                    'agent'
+                )}";
+                assert "summary" in agent_report , "Should have summary field";
+                assert len(agent_report["summary"]) > 0 , "Summary should not be empty";
             } else {
-                assert len(response_data) > 0, "Response should not be empty";
+                assert len(response_data) > 0 , "Response should not be empty";
             }
         } except HTTPError as exc {
             error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
