@@ -1269,7 +1269,7 @@ byLLM validates that responses match the declared return type, coercing when pos
 
 ## Agent Telemetry
 
-byLLM provides a built-in telemetry system that emits events after each `by llm()` invocation completes. You can register callbacks to capture per-invocation data — caller name, arguments, model, latency, status, user prompt, agent response, and conversation history.
+byLLM provides a built-in telemetry system that emits events after each `by llm()` invocation completes. You can register callbacks to capture per-invocation data - caller name, arguments, model, latency, status, user prompt, agent response, and conversation history.
 
 This is a **publish-only** mechanism: byLLM does not store any telemetry data. You supply a callback function that receives a telemetry record dict for each completed invocation.
 
@@ -1283,15 +1283,13 @@ This is a **publish-only** mechanism: byLLM does not store any telemetry data. Y
 
     def my_callback(record: dict) -> None {
         telemetry_log.append(record);
-        print(f"[{record['caller_name']}] {record['model']} — {record['status']} in {record['latency_ms']:.0f}ms");
+        print(f"[{record['caller_name']}] {record['model']} - {record['status']} in {record['latency_ms']:.0f}ms");
     }
 
     with entry {
         register_agent_callback(my_callback);
     }
     ```
-
-Callbacks are deduplicated — registering the same function twice has no effect.
 
 ### Telemetry Record Fields
 
@@ -1322,7 +1320,7 @@ import from byllm.telemetry { register_agent_callback }
 glob llm_call_records: list = [],
      agent_records: list = [];
 
-# litellm per-call callback — captures tokens & cost
+# litellm per-call callback - captures tokens & cost
 class UserTelemetryLogger(CustomLogger) {
     def log_success_event(
         self: UserTelemetryLogger,
@@ -1345,7 +1343,7 @@ class UserTelemetryLogger(CustomLogger) {
     }
 }
 
-# byllm agent callback — captures caller, args, response
+# byllm agent callback - captures caller, args, response
 def capture_agent(record: dict) -> None {
     agent_records.append(record);
 }
