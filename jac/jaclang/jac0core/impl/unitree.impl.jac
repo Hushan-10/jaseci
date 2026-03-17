@@ -860,6 +860,13 @@ impl NameAtom.sem_token -> (tuple[(SemTokType, SemTokMod)] | None) {
         return (SemTokType.FUNCTION, SemTokMod.DEFINITION);
     }
     if self.sym {
+        # Before falling through to PROPERTY, check if the node's resolved type
+        # is a function/overloaded type. This handles imported functions where
+        # sym.decl.name_of is a plain Name (import alias) rather than Ability.
+        if self.type is not None
+        and type(self.type).__name__ in ('FunctionType', 'OverloadedType') {
+            return (SemTokType.FUNCTION, SemTokMod.DEFINITION);
+        }
         return (SemTokType.PROPERTY, SemTokMod.DEFINITION);
     }
     # Handle __getattr__ dynamic attributes (explicitly marked by type checker)
@@ -2399,11 +2406,10 @@ impl String.lit_value -> str {
                 is_raw2 = 'r' in prefix2;
             }
             if not is_raw2 {
-                import codecs;
                 result = self.value;
                 try {
-                    result = codecs.decode(result, 'unicode_escape');
-                } except Exception {
+                    result = ast3.literal_eval(f'"{result}"');
+                } except (ValueError, SyntaxError) {
                     placeholder = '\x00';
                     result = result.replace('\\\\', placeholder);
                     result = result.replace('\\n', '\n');
@@ -2424,12 +2430,13 @@ impl String.lit_value -> str {
                 is_raw = 'r' in prefix;
             }
             if not is_raw {
-                import codecs;
                 result = self.value;
-                # Use codecs to decode all escape sequences (like \x1b, \n, \t, etc.)
+                # Use ast3.literal_eval to correctly handle escape sequences (\n, \t,
+                # \x1b, etc.) and non-ASCII Unicode chars (e.g. emojis), consistent
+                # with how normal string literals are handled above.
                 try {
-                    result = codecs.decode(result, 'unicode_escape');
-                } except Exception {
+                    result = ast3.literal_eval(f'"{result}"');
+                } except (ValueError, SyntaxError) {
                     # Fallback to manual handling if decode fails
                     placeholder = '\x00';
                     result = result.replace('\\\\', placeholder);
