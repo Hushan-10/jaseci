@@ -1,5 +1,6 @@
 """Mock entry point for integration testing — uses MockLLM instead of real API."""
 import os;
+import re;
 import from byllm.lib { MockLLM, MockToolCall }
 import from byllm.types { StreamEvent }
 import from tools { calculate, run_and_test_python_code }
@@ -27,43 +28,10 @@ glob llms = {
     ),
 };
 
-# enums
-
-enum Correctness { CORRECT, PARTIAL, WRONG }
-
-enum Intent {
-    ConceptAgent,
-    MathAgent,
-    ImageAgent,
-    VideoAgent,
-    ResearchAgent
-}
-
-enum ConfidenceLevel { LOW, MEDIUM, HIGH }
-
-enum Personality {
-    INTROVERT,
-    EXTROVERT,
-    AMBIVERT
-}
-
-
-obj StudyAnswer {
-    has content: str,
-        correctness: Correctness,
-        confidence: float;
-}
-
 obj ResearchSummary {
     has summary: str,
         key_points: list[str],
         confidence: str;
-}
-
-obj Person {
-    has full_name: str,
-        year_of_death: str,
-        personality: str;
 }
 
 node ConceptAgent {
@@ -158,7 +126,6 @@ walker:pub Supervisor {
         # Load mock outputs based on query content before routing.
         # Use re to detect math expressions (digits near operators) to avoid
         # false positives on hyphens inside words like "fine-tuning".
-        import re;
         q = self.query;
         if "machine learning" in q.lower() or "explain" in q.lower() {
             load_concept_agent_outputs(llms);

@@ -25,6 +25,7 @@ import from urllib.request { Request, urlopen }
 """Get a free port by binding to port 0 and releasing it."""
 def get_free_port -> int {
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s {
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1);
         s.bind(("", 0));
         s.listen(1);
         port = s.getsockname()[1];
