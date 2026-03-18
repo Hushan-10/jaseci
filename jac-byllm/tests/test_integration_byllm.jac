@@ -121,51 +121,60 @@ def post_json(port: int, path: str, payload: dict, token: str = "") -> dict {
     }
 }
 
-"""Start the byllm server, run a callback, then tear down."""
-def with_byllm_server(test_fn: callable) -> None {
+# ---------------------------------------------------------------------------
+# Module-level shared server state — started once for all tests
+# ---------------------------------------------------------------------------
+glob _server: object = None;
+glob _server_port: int = 0;
+glob _server_token: str = "";
+
+"""Start the shared byllm server (called once before all tests)."""
+def setup_byllm_server -> None {
+    global _server, _server_port, _server_token;
     tests_dir = os.path.dirname(os.path.abspath(__file__));
     fixture_path = os.path.join(tests_dir, "fixtures", "integration_byllm");
-    server_port = get_free_port();
+    _server_port = get_free_port();
     jac_cmd = get_jac_command();
 
-    server = Popen(
-        [*jac_cmd, "start", "main.jac", "-p", str(server_port)], cwd=fixture_path
+    _server = Popen(
+        [*jac_cmd, "start", "main.jac", "-p", str(_server_port)], cwd=fixture_path
     );
+    wait_for_port("127.0.0.1", _server_port, timeout=60.0);
+    _server_token = register_user(_server_port);
+}
 
-    try {
-        wait_for_port("127.0.0.1", server_port, timeout=60.0);
-        token = register_user(server_port);
-        test_fn(server, server_port, token);
-    } finally {
-        server.terminate();
+"""Tear down the shared byllm server (called once after all tests)."""
+def teardown_byllm_server -> None {
+    global _server;
+    if _server is not None {
+        _server.terminate();
         try {
-            server.wait(timeout=15);
+            _server.wait(timeout=15);
         } except Exception {
-            server.kill();
-            server.wait(timeout=5);
+            _server.kill();
+            _server.wait(timeout=5);
         }
+        _server = None;
         time.sleep(1);
         gc.collect();
     }
 }
 
-
 # ---------------------------------------------------------------------------
 # Server start test
 # ---------------------------------------------------------------------------
 test "server starts successfully" {
-    def _test(server: Popen, server_port: int, token: str) -> None {
-        # Verify server process is still alive
-        assert server.poll() is None , "Server should be running";
+    setup_byllm_server();
+    # Verify server process is still alive
+    assert _server.poll() is None , "Server should be running";
 
-        # Verify port is still accepting connections
-        try {
-            wait_for_port("127.0.0.1", server_port, timeout=5.0);
-        } except TimeoutError {
-            pytest.fail("Server port is not accepting connections");
-        }
+    # Verify port is still accepting connections
+    try {
+        wait_for_port("127.0.0.1", _server_port, timeout=5.0);
+    } except TimeoutError {
+        teardown_byllm_server();
+        pytest.fail("Server port is not accepting connections");
     }
-    with_byllm_server(_test);
 }
 
 
@@ -173,130 +182,119 @@ test "server starts successfully" {
 # Walker endpoint tests
 # ---------------------------------------------------------------------------
 test "supervisor routes to concept agent" {
-    def _test(server: Popen, server_port: int, token: str) -> None {
-        concept_payload = {"query": "Explain machine learning in simple terms"};
+    concept_payload = {"query": "Explain machine learning in simple terms"};
 
-        try {
-            response_data = post_json(
-                server_port, "/walker/Supervisor", concept_payload, token
-            );
+    try {
+        response_data = post_json(
+            _server_port, "/walker/Supervisor", concept_payload, _server_token
+        );
 
-            if "reports" in response_data {
-                reports = response_data["reports"];
-                assert len(reports) > 0 , "Should have at least one report";
-                agent_report = reports[0];
-                assert agent_report["agent"] == "ConceptAgent" , f"Expected ConceptAgent, got {agent_report.get(
-                    'agent'
-                )}";
-                assert len(agent_report["response"]) > 0 , "Response should not be empty";
-            } else {
-                assert len(response_data) > 0 , "Response should not be empty";
-            }
-        } except HTTPError as exc {
-            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
-            pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}");
+        if "reports" in response_data {
+            reports = response_data["reports"];
+            assert len(reports) > 0 , "Should have at least one report";
+            agent_report = reports[0];
+            assert agent_report["agent"] == "ConceptAgent" , f"Expected ConceptAgent, got {agent_report.get(
+                'agent'
+            )}";
+            assert len(agent_report["response"]) > 0 , "Response should not be empty";
+        } else {
+            assert len(response_data) > 0 , "Response should not be empty";
         }
+    } except HTTPError as exc {
+        error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
+        pytest.fail(f"ConceptAgent test failed: {exc.code}\n{error_body}");
     }
-    with_byllm_server(_test);
 }
 
 test "supervisor routes to math agent with streaming" {
-    def _test(server: Popen, server_port: int, token: str) -> None {
-        math_payload = {"query": "What is (15 + 5) * 2 - (10 / 2)?"};
+    math_payload = {"query": "What is (15 + 5) * 2 - (10 / 2)?"};
 
-        try {
-            response_data = post_json(
-                server_port, "/walker/Supervisor", math_payload, token
-            );
+    try {
+        response_data = post_json(
+            _server_port, "/walker/Supervisor", math_payload, _server_token
+        );
 
-            if "reports" in response_data {
-                reports = response_data["reports"];
-                assert len(reports) > 0 , "Should have at least one report";
-                agent_report = reports[0];
-                assert agent_report["agent"] == "MathAgent" , f"Expected MathAgent, got {agent_report.get(
-                    'agent'
-                )}";
-                assert len(agent_report["response"]) > 0 , "Response should not be empty";
-                # MathAgent uses stream=True, logging=True — the handler
-                # iterates StreamEvent objects from the ReAct pipeline
-                # (tool_call → tool_result → steps_done → chunk).
-                # A correct "35.0" proves the full streaming chain worked.
-                assert "35" in agent_report["response"] , f"Expected 35 in streamed response, got {agent_report[
-                    'response'
-                ]}";
-            } else {
-                assert len(response_data) > 0 , "Response should not be empty";
-            }
-        } except HTTPError as exc {
-            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
-            pytest.fail(f"MathAgent streaming test failed: {exc.code}\n{error_body}");
+        if "reports" in response_data {
+            reports = response_data["reports"];
+            assert len(reports) > 0 , "Should have at least one report";
+            agent_report = reports[0];
+            assert agent_report["agent"] == "MathAgent" , f"Expected MathAgent, got {agent_report.get(
+                'agent'
+            )}";
+            assert len(agent_report["response"]) > 0 , "Response should not be empty";
+            # MathAgent uses stream=True, logging=True — the handler
+            # iterates StreamEvent objects from the ReAct pipeline
+            # (tool_call → tool_result → steps_done → chunk).
+            # A correct "35.0" proves the full streaming chain worked.
+            assert "35" in agent_report["response"] , f"Expected 35 in streamed response, got {agent_report[
+                'response'
+            ]}";
+        } else {
+            assert len(response_data) > 0 , "Response should not be empty";
         }
+    } except HTTPError as exc {
+        error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
+        pytest.fail(f"MathAgent streaming test failed: {exc.code}\n{error_body}");
     }
-    with_byllm_server(_test);
 }
 
 test "supervisor routes to code agent with streaming" {
-    def _test(server: Popen, server_port: int, token: str) -> None {
-        code_payload = {
-            "query": "Write a Python function to compute the Fibonacci sequence"
-        };
+    code_payload = {
+        "query": "Write a Python function to compute the Fibonacci sequence"
+    };
 
-        try {
-            response_data = post_json(
-                server_port, "/walker/Supervisor", code_payload, token
-            );
+    try {
+        response_data = post_json(
+            _server_port, "/walker/Supervisor", code_payload, _server_token
+        );
 
-            if "reports" in response_data {
-                reports = response_data["reports"];
-                assert len(reports) > 0 , "Should have at least one report";
-                agent_report = reports[0];
-                assert agent_report["agent"] == "CodeAgent" , f"Expected CodeAgent, got {agent_report.get(
-                    'agent'
-                )}";
-                assert len(agent_report["response"]) > 0 , "Response should not be empty";
-                # CodeAgent uses stream=True, logging=True with ReAct pipeline.
-                # A correct response containing 'fibonacci' proves the full streaming chain worked.
-                assert "fibonacci" in agent_report["response"].lower() , f"Expected fibonacci in streamed response, got {agent_report[
-                    'response'
-                ]}";
-            } else {
-                assert len(response_data) > 0 , "Response should not be empty";
-            }
-        } except HTTPError as exc {
-            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
-            pytest.fail(f"CodeAgent streaming test failed: {exc.code}\n{error_body}");
+        if "reports" in response_data {
+            reports = response_data["reports"];
+            assert len(reports) > 0 , "Should have at least one report";
+            agent_report = reports[0];
+            assert agent_report["agent"] == "CodeAgent" , f"Expected CodeAgent, got {agent_report.get(
+                'agent'
+            )}";
+            assert len(agent_report["response"]) > 0 , "Response should not be empty";
+            # CodeAgent uses stream=True, logging=True with ReAct pipeline.
+            # A correct response containing 'fibonacci' proves the full streaming chain worked.
+            assert "fibonacci" in agent_report["response"].lower() , f"Expected fibonacci in streamed response, got {agent_report[
+                'response'
+            ]}";
+        } else {
+            assert len(response_data) > 0 , "Response should not be empty";
         }
+    } except HTTPError as exc {
+        error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
+        pytest.fail(f"CodeAgent streaming test failed: {exc.code}\n{error_body}");
     }
-    with_byllm_server(_test);
 }
 
 test "supervisor routes to research agent" {
-    def _test(server: Popen, server_port: int, token: str) -> None {
-        research_payload = {
-            "query": "Compare supervised fine-tuning and prompt engineering in large language models"
-        };
+    research_payload = {
+        "query": "Compare supervised fine-tuning and prompt engineering in large language models"
+    };
 
-        try {
-            response_data = post_json(
-                server_port, "/walker/Supervisor", research_payload, token
-            );
+    try {
+        response_data = post_json(
+            _server_port, "/walker/Supervisor", research_payload, _server_token
+        );
 
-            if "reports" in response_data {
-                reports = response_data["reports"];
-                assert len(reports) > 0 , "Should have at least one report";
-                agent_report = reports[0];
-                assert agent_report["agent"] == "ResearchAgent" , f"Expected ResearchAgent, got {agent_report.get(
-                    'agent'
-                )}";
-                assert "summary" in agent_report , "Should have summary field";
-                assert len(agent_report["summary"]) > 0 , "Summary should not be empty";
-            } else {
-                assert len(response_data) > 0 , "Response should not be empty";
-            }
-        } except HTTPError as exc {
-            error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
-            pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}");
+        if "reports" in response_data {
+            reports = response_data["reports"];
+            assert len(reports) > 0 , "Should have at least one report";
+            agent_report = reports[0];
+            assert agent_report["agent"] == "ResearchAgent" , f"Expected ResearchAgent, got {agent_report.get(
+                'agent'
+            )}";
+            assert "summary" in agent_report , "Should have summary field";
+            assert len(agent_report["summary"]) > 0 , "Summary should not be empty";
+        } else {
+            assert len(response_data) > 0 , "Response should not be empty";
         }
+    } except HTTPError as exc {
+        error_body = exc.read().decode("utf-8", errors="ignore") if exc.fp else "";
+        pytest.fail(f"ResearchAgent test failed: {exc.code}\n{error_body}");
     }
-    with_byllm_server(_test);
+    teardown_byllm_server();
 }
