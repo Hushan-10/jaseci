@@ -124,13 +124,13 @@ def post_json(port: int, path: str, payload: dict, token: str = "") -> dict {
 # ---------------------------------------------------------------------------
 # Module-level shared server state — started once for all tests
 # ---------------------------------------------------------------------------
-glob _server: object = None;
-glob _server_port: int = 0;
-glob _server_token: str = "";
+glob _server: object = None,
+     _server_port: int = 0,
+     _server_token: str = "";
 
 """Start the shared byllm server (called once before all tests)."""
 def setup_byllm_server -> None {
-    global _server, _server_port, _server_token;
+    global _server,_server_port,_server_token;
     tests_dir = os.path.dirname(os.path.abspath(__file__));
     fixture_path = os.path.join(tests_dir, "fixtures", "integration_byllm");
     _server_port = get_free_port();
