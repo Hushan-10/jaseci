@@ -31,7 +31,7 @@ cl {
         useEffect(
             lambda -> any { if not autoRefresh {
                 return undefined;
-            }interval = setInterval(lambda -> None { loadSummary();}, 5000);return lambda -> None { clearInterval(
+            }interval = setInterval(lambda -> None { loadSummary();}, 15000);return lambda -> None { clearInterval(
                 interval
             );}; },
             [autoRefresh]
