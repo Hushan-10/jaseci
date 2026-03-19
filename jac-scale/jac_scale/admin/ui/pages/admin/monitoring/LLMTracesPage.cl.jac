@@ -48,7 +48,7 @@ cl {
         useEffect(
             lambda -> any { if not autoRefresh {
                 return undefined;
-            }interval = setInterval(lambda -> None { loadTraces();}, 5000);return lambda -> None { clearInterval(
+            }interval = setInterval(lambda -> None { loadTraces();}, 15000);return lambda -> None { clearInterval(
                 interval
             );}; },
             [autoRefresh]
