@@ -16,9 +16,15 @@ cl {
         status: str = ""
     ) -> dict {
         params = f"limit={limit}&offset={offset}";
-        if caller { params += f"&caller={encodeURIComponent(caller)}"; }
-        if model { params += f"&model={encodeURIComponent(model)}"; }
-        if status { params += f"&status={encodeURIComponent(status)}"; }
+        if caller {
+            params += f"&caller={encodeURIComponent(caller)}";
+        }
+        if model {
+            params += f"&model={encodeURIComponent(model)}";
+        }
+        if status {
+            params += f"&status={encodeURIComponent(status)}";
+        }
         return await get("/admin/llm/telemetry/traces?" + params, token);
     }
 

@@ -114,9 +114,7 @@ impl JacScaleConfig.get_default_config(self: JacScaleConfig) -> dict[str, Any] {
             'system_user_password': 'system_secret',
             'collection': 'scheduled_jobs'
         },
-        'telemetry': {
-            'max_traces': 1000
-        }
+        'telemetry': {'max_traces': 1000}
     };
 }
 
@@ -302,9 +300,7 @@ impl reset_scale_config -> None {
 impl JacScaleConfig.get_telemetry_config(self: JacScaleConfig) -> dict[str, Any] {
     config = self.load();
     telemetry_config = config.get('telemetry', {});
-    return {
-        'max_traces': int(telemetry_config.get('max_traces', 1000))
-    };
+    return {'max_traces': int(telemetry_config.get('max_traces', 1000))};
 }
 
 """Get scheduler configuration from jac.toml."""
