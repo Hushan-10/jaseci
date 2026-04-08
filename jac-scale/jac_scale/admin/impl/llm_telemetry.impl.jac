@@ -196,7 +196,8 @@ obj TelemetryStore {
             inv_id = record.get("invocation_id");
             if inv_id and inv_id in self._traces {
                 trace = self._traces[inv_id];
-                trace.parent_invocation_id = record.get("parent_invocation_id") or trace.parent_invocation_id;
+                trace.parent_invocation_id = record.get("parent_invocation_id")
+                or trace.parent_invocation_id;
                 trace.caller_name = record.get("caller_name") or trace.caller_name;
                 trace.caller_args = record.get("caller_args") or trace.caller_args;
                 trace.user_prompt = record.get("user_prompt") or "";
@@ -725,7 +726,12 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
         caller = qp.get("caller") or None;
         root_only = qp.get("root_only", "").lower() in ("true", "1", "yes");
         data = store.get_traces(
-            limit=limit, offset=offset, model=model, status=status, caller=caller, root_only=root_only
+            limit=limit,
+            offset=offset,
+            model=model,
+            status=status,
+            caller=caller,
+            root_only=root_only
         );
         return JSONResponse(content={"ok": True, "data": data});
     }

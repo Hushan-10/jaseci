@@ -52,22 +52,40 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
         # For streaming (generator) results, wrap so ContextVar stays active
         # during lazy iteration — tool calls inside the generator need the parent ID.
         if isinstance(result, _types_mod.GeneratorType) {
-            def _wrap_generator(gen: object, mt: object, model_name: str, start: float, ctx_token: object) -> object {
+            def _wrap_generator(
+                gen: object,
+                mt: object,
+                model_name: str,
+                start: float,
+                ctx_token: object
+            ) -> object {
                 try {
                     yield from gen;
                 } except Exception as inner_e {
                     _emit_agent_telemetry(
-                        mt, None, model_name, (time.time() - start) * 1000, "error", inner_e
+                        mt,
+                        None,
+                        model_name,
+                        (time.time() - start) * 1000,
+                        "error",
+                        inner_e
                     );
                     raise;
                 } finally {
                     _emit_agent_telemetry(
-                        mt, "[streaming]", model_name, (time.time() - start) * 1000, "success", None
+                        mt,
+                        "[streaming]",
+                        model_name,
+                        (time.time() - start) * 1000,
+                        "success",
+                        None
                     );
                     _current_invocation_id.reset(ctx_token);
                 }
             }
-            return _wrap_generator(result, mt_run, self.model_name, _start, _ctx_token);
+            return _wrap_generator(
+                result, mt_run, self.model_name, _start, _ctx_token
+            );
         }
 
         _emit_agent_telemetry(

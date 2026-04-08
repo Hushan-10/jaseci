@@ -54,13 +54,10 @@ cl {
             } else {
                 expandedIds = expandedIds.concat([traceId]);
                 if not childrenMap[traceId] {
-                    tResult = await getLLMTraceDetail(
-                        auth["authToken"], traceId
-                    );
+                    tResult = await getLLMTraceDetail(auth["authToken"], traceId);
                     if tResult["ok"] and tResult["data"] {
                         newMap = Object.assign({}, childrenMap);
-                        newMap[traceId] = tResult["data"]["child_traces"]
-                            or [];
+                        newMap[traceId] = tResult["data"]["child_traces"] or [];
                         childrenMap = newMap;
                     }
                 }
@@ -203,10 +200,21 @@ cl {
                                     <div className="text-white">
                                         {formatTokens(
                                             selectedTrace["total_tokens"] or 0
-                                        )}
-                                        {(selectedTrace["aggregated_total_tokens"] or 0) > (selectedTrace["total_tokens"] or 0)
-                                        and <span className="text-slate-500 text-xs ml-1">
-                                            {"(tree: " + formatTokens(selectedTrace["aggregated_total_tokens"] or 0) + ")"}
+                                        )}{(
+                                            selectedTrace[
+                                                "aggregated_total_tokens"
+                                            ]
+                                            or 0
+                                        ) > (selectedTrace["total_tokens"] or 0)
+                                        and <span
+                                            className="text-slate-500 text-xs ml-1"
+                                        >
+                                            {"(tree: " + formatTokens(
+                                                selectedTrace[
+                                                    "aggregated_total_tokens"
+                                                ]
+                                                or 0
+                                            ) + ")"}
                                         </span>}
                                     </div>
                                 </div>
@@ -215,12 +223,18 @@ cl {
                                         Cost
                                     </div>
                                     <div className="text-yellow-400">
-                                        {formatCost(
-                                            selectedTrace["total_cost"] or 0
-                                        )}
-                                        {(selectedTrace["aggregated_total_cost"] or 0) > (selectedTrace["total_cost"] or 0)
-                                        and <span className="text-slate-500 text-xs ml-1">
-                                            {"(tree: " + formatCost(selectedTrace["aggregated_total_cost"] or 0) + ")"}
+                                        {formatCost(selectedTrace["total_cost"] or 0)}{(
+                                            selectedTrace["aggregated_total_cost"] or 0
+                                        ) > (selectedTrace["total_cost"] or 0)
+                                        and <span
+                                            className="text-slate-500 text-xs ml-1"
+                                        >
+                                            {"(tree: " + formatCost(
+                                                selectedTrace[
+                                                    "aggregated_total_cost"
+                                                ]
+                                                or 0
+                                            ) + ")"}
                                         </span>}
                                     </div>
                                 </div>
@@ -241,7 +255,9 @@ cl {
                                     </div>
                                     <div
                                         className="text-teal-400 font-mono text-xs cursor-pointer hover:underline"
-                                        onClick={lambda { loadTraceDetail(selectedTrace["parent_invocation_id"]);}}
+                                        onClick={lambda { loadTraceDetail(
+                                            selectedTrace["parent_invocation_id"]
+                                        );}}
                                     >
                                         {selectedTrace["parent_invocation_id"]}
                                     </div>
@@ -384,16 +400,22 @@ cl {
                             className="bg-slate-900 border border-slate-800 rounded-lg p-5"
                         >
                             <h3 className="text-lg font-semibold text-white mb-3">
-                                Nested Traces ({str(len(selectedTrace["child_traces"] or []))})
+                                Nested Traces ({str(
+                                    len(selectedTrace["child_traces"] or [])
+                                )})
                             </h3>
                             <div className="space-y-2">
                                 {[
                                     <div
                                         key={child["invocation_id"]}
                                         className="bg-slate-800 border border-slate-700 rounded-lg p-4 cursor-pointer hover:border-teal-500/50 transition-colors"
-                                        onClick={lambda { loadTraceDetail(child["invocation_id"]);}}
+                                        onClick={lambda { loadTraceDetail(
+                                            child["invocation_id"]
+                                        );}}
                                     >
-                                        <div className="flex items-center justify-between">
+                                        <div
+                                            className="flex items-center justify-between"
+                                        >
                                             <div className="flex items-center gap-3">
                                                 <span
                                                     className={getStatusBadge(
@@ -402,31 +424,47 @@ cl {
                                                 >
                                                     {child["status"] or "unknown"}
                                                 </span>
-                                                <span className="text-purple-300 font-mono text-sm">
+                                                <span
+                                                    className="text-purple-300 font-mono text-sm"
+                                                >
                                                     {child["caller_name"] or "unknown"}
                                                 </span>
-                                                <span className="text-teal-300 font-mono text-xs">
+                                                <span
+                                                    className="text-teal-300 font-mono text-xs"
+                                                >
                                                     {child["model"] or ""}
                                                 </span>
                                                 {(child["child_count"] or 0) > 0
-                                                and <span className="px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 text-xs border border-teal-500/40">
-                                                    {"+" + String(child["child_count"]) + " nested"}
+                                                and <span
+                                                    className="px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-400 text-xs border border-teal-500/40"
+                                                >
+                                                    {"+" + String(
+                                                        child["child_count"]
+                                                    ) + " nested"}
                                                 </span>}
                                             </div>
                                             <div
                                                 className="flex items-center gap-4 text-xs text-slate-400"
                                             >
                                                 <span>
-                                                    {String(child["llm_call_count"] or 0) + " calls"}
+                                                    {String(
+                                                        child["llm_call_count"] or 0
+                                                    ) + " calls"}
                                                 </span>
                                                 <span>
-                                                    {formatTokens(child["total_tokens"] or 0) + " tokens"}
+                                                    {formatTokens(
+                                                        child["total_tokens"] or 0
+                                                    ) + " tokens"}
                                                 </span>
                                                 <span className="text-yellow-400">
-                                                    {formatCost(child["total_cost"] or 0)}
+                                                    {formatCost(
+                                                        child["total_cost"] or 0
+                                                    )}
                                                 </span>
                                                 <span>
-                                                    {formatLatency(child["total_latency_ms"] or 0)}
+                                                    {formatLatency(
+                                                        child["total_latency_ms"] or 0
+                                                    )}
                                                 </span>
                                             </div>
                                         </div>
@@ -439,7 +477,7 @@ cl {
                 </div>;
         }
 
-        def getDisplayItems() -> list {
+        def getDisplayItems -> list {
             items: list = [];
             for i in traces {
                 items.push({"trace": i, "depth": 0});
@@ -529,21 +567,26 @@ cl {
                         >
                             <div
                                 className="flex-1 flex items-center gap-2 min-w-0"
-                                style={{"paddingLeft": String(item["depth"] * 28) + "px"}}
-                                onClick={lambda { loadTraceDetail(item["trace"]["invocation_id"]);}}
+                                style={{
+                                    "paddingLeft": String(item["depth"] * 28) + "px"
+                                }}
+                                onClick={lambda { loadTraceDetail(
+                                    item["trace"]["invocation_id"]
+                                );}}
                             >
                                 {(item["trace"]["child_count"] or 0) > 0
                                 and <button
                                     className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-slate-400 hover:text-teal-400 rounded hover:bg-slate-700/50"
-                                    onClick={lambda e: any { e.stopPropagation();toggleExpand(item["trace"]["invocation_id"]);}}
+                                    onClick={lambda e: any { e.stopPropagation();toggleExpand(
+                                        item["trace"]["invocation_id"]
+                                    );}}
                                 >
                                     {expandedIds.indexOf(
                                         item["trace"]["invocation_id"]
                                     ) >= 0
                                     and <span className="text-xs">
                                         ▼
-                                    </span>}
-                                    {expandedIds.indexOf(
+                                    </span>}{expandedIds.indexOf(
                                         item["trace"]["invocation_id"]
                                     ) < 0
                                     and <span className="text-xs">
@@ -551,7 +594,7 @@ cl {
                                     </span>}
                                 </button>}
                                 {(item["trace"]["child_count"] or 0) == 0
-                                and <span className="flex-shrink-0 w-5" />}
+                                and <span className="flex-shrink-0 w-5"/>}
                                 {item["depth"] > 0
                                 and <span className="text-slate-600 text-xs mr-1">
                                     └
@@ -600,17 +643,12 @@ cl {
                                 )}
                             </div>
                             <div className="w-16 text-right text-sm text-slate-300">
-                                {formatLatency(
-                                    item["trace"]["total_latency_ms"] or 0
-                                )}
+                                {formatLatency(item["trace"]["total_latency_ms"] or 0)}
                             </div>
                             <div className="w-16 text-right text-sm text-slate-500">
-                                {formatTimestamp(
-                                    item["trace"]["timestamp"] or ""
-                                )}
+                                {formatTimestamp(item["trace"]["timestamp"] or "")}
                             </div>
-                        </div>
-                        for item in getDisplayItems()
+                        </div> for item in getDisplayItems()
                     ]}
                 </div>}
             </div>;

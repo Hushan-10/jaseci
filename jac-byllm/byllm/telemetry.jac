@@ -10,7 +10,9 @@ import logging;
 
 glob _agent_callbacks: list = [],
      logger = logging.getLogger(__name__),
-     _current_invocation_id: ContextVar = ContextVar('byllm_invocation_id', default=None);
+     _current_invocation_id: ContextVar = ContextVar(
+         'byllm_invocation_id', default=None
+     );
 
 """Register a callback to receive agent invocation completion events."""
 def:pub register_agent_callback(callback: Callable) -> None;
