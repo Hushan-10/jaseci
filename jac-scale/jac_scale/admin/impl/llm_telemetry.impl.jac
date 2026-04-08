@@ -70,6 +70,7 @@ obj LLMCallRecord {
 obj Trace {
     """A complete agent invocation trace with correlated LLM calls."""
     has invocation_id: str = "",
+        parent_invocation_id: str | None = None,
         caller_name: str = "unknown",
         caller_args: dict = {},
         model: str = "unknown",
@@ -89,6 +90,7 @@ obj Trace {
     def to_dict(include_detail: bool = False) -> dict {
         result = {
             "invocation_id": self.invocation_id,
+            "parent_invocation_id": self.parent_invocation_id,
             "caller_name": self.caller_name,
             "caller_args": self.caller_args,
             "model": self.model,
@@ -142,6 +144,7 @@ obj TelemetryStore {
             if inv_id not in self._traces {
                 self._traces[inv_id] = Trace(
                     invocation_id=inv_id,
+                    parent_invocation_id=metadata.get("jac_parent_invocation_id"),
                     caller_name=metadata.get("jac_caller_name") or "unknown",
                     model=event.get("model") or "unknown",
                     timestamp=event.get("startTime") or time.time()
@@ -193,6 +196,7 @@ obj TelemetryStore {
             inv_id = record.get("invocation_id");
             if inv_id and inv_id in self._traces {
                 trace = self._traces[inv_id];
+                trace.parent_invocation_id = record.get("parent_invocation_id") or trace.parent_invocation_id;
                 trace.caller_name = record.get("caller_name") or trace.caller_name;
                 trace.caller_args = record.get("caller_args") or trace.caller_args;
                 trace.user_prompt = record.get("user_prompt") or "";
@@ -212,6 +216,7 @@ obj TelemetryStore {
                 # Agent callback arrived but no LLM calls recorded (e.g., MockLLM or proxy path)
                 self._traces[inv_id] = Trace(
                     invocation_id=inv_id,
+                    parent_invocation_id=record.get("parent_invocation_id"),
                     caller_name=record.get("caller_name") or "unknown",
                     caller_args=record.get("caller_args") or {},
                     model=record.get("model") or "unknown",
@@ -287,7 +292,8 @@ obj TelemetryStore {
         offset: int = 0,
         model: str | None = None,
         status: str | None = None,
-        caller: str | None = None
+        caller: str | None = None,
+        root_only: bool = False
     ) -> dict {
         # Return traces newest-first with optional filters.
         with self._lock {
@@ -295,6 +301,14 @@ obj TelemetryStore {
             # Backfill streaming responses from LLM call data
             for t in all_traces {
                 self._backfill_streaming_response(t);
+            }
+            # Filter to root traces only (no parent)
+            if root_only {
+                all_traces = [
+                    t
+                    for t in all_traces
+                    if t.parent_invocation_id is None
+                ];
             }
             # Apply filters
             if model {
@@ -320,8 +334,42 @@ obj TelemetryStore {
             }
             total = len(all_traces);
             page = all_traces[offset:offset + limit];
+            # Build a children lookup for efficient recursive aggregation.
+            all_trace_values = list(self._traces.values());
+            children_lookup: dict = {};
+            for tv in all_trace_values {
+                pid = tv.parent_invocation_id;
+                if pid is not None {
+                    if pid not in children_lookup {
+                        children_lookup[pid] = [];
+                    }
+                    children_lookup[pid].append(tv);
+                }
+            }
+            enriched = [];
+            for t in page {
+                d = t.to_dict();
+                direct_children = children_lookup.get(t.invocation_id, []);
+                d["child_count"] = len(direct_children);
+                # Recursively aggregate all descendant costs/tokens.
+                agg_tokens = t.total_tokens;
+                agg_cost = t.total_cost;
+                agg_calls = t.llm_call_count;
+                worklist = list(direct_children);
+                while worklist {
+                    desc = worklist.pop();
+                    agg_tokens += desc.total_tokens;
+                    agg_cost += desc.total_cost;
+                    agg_calls += desc.llm_call_count;
+                    worklist.extend(children_lookup.get(desc.invocation_id, []));
+                }
+                d["aggregated_total_tokens"] = agg_tokens;
+                d["aggregated_total_cost"] = round(agg_cost, 6);
+                d["aggregated_llm_call_count"] = agg_calls;
+                enriched.append(d);
+            }
             return {
-                "traces": [t.to_dict() for t in page],
+                "traces": enriched,
                 "total": total,
                 "has_more": (offset + limit) < total
             };
@@ -334,7 +382,61 @@ obj TelemetryStore {
             trace = self._traces.get(invocation_id);
             if trace {
                 self._backfill_streaming_response(trace);
-                return trace.to_dict(include_detail=True);
+                result = trace.to_dict(include_detail=True);
+                # Build children lookup for recursive aggregation.
+                all_vals = list(self._traces.values());
+                children_lookup: dict = {};
+                for tv in all_vals {
+                    pid = tv.parent_invocation_id;
+                    if pid is not None {
+                        if pid not in children_lookup {
+                            children_lookup[pid] = [];
+                        }
+                        children_lookup[pid].append(tv);
+                    }
+                }
+                # Direct children of this trace.
+                child_traces = children_lookup.get(invocation_id, []);
+                enriched_children: list = [];
+                for ct in child_traces {
+                    self._backfill_streaming_response(ct);
+                    cd = ct.to_dict(include_detail=True);
+                    # Enrich each child with its own child_count and aggregated stats.
+                    gc = children_lookup.get(ct.invocation_id, []);
+                    cd["child_count"] = len(gc);
+                    ct_agg_t = ct.total_tokens;
+                    ct_agg_c = ct.total_cost;
+                    ct_agg_l = ct.llm_call_count;
+                    ct_wl = list(gc);
+                    while ct_wl {
+                        ct_desc = ct_wl.pop();
+                        ct_agg_t += ct_desc.total_tokens;
+                        ct_agg_c += ct_desc.total_cost;
+                        ct_agg_l += ct_desc.llm_call_count;
+                        ct_wl.extend(children_lookup.get(ct_desc.invocation_id, []));
+                    }
+                    cd["aggregated_total_tokens"] = ct_agg_t;
+                    cd["aggregated_total_cost"] = round(ct_agg_c, 6);
+                    cd["aggregated_llm_call_count"] = ct_agg_l;
+                    enriched_children.append(cd);
+                }
+                result["child_traces"] = enriched_children;
+                # Aggregate all descendant costs/tokens recursively.
+                agg_tokens = result["total_tokens"];
+                agg_cost = result["total_cost"];
+                agg_llm_calls = result["llm_call_count"];
+                worklist = list(child_traces);
+                while worklist {
+                    desc = worklist.pop();
+                    agg_tokens += desc.total_tokens;
+                    agg_cost += desc.total_cost;
+                    agg_llm_calls += desc.llm_call_count;
+                    worklist.extend(children_lookup.get(desc.invocation_id, []));
+                }
+                result["aggregated_total_tokens"] = agg_tokens;
+                result["aggregated_total_cost"] = round(agg_cost, 6);
+                result["aggregated_llm_call_count"] = agg_llm_calls;
+                return result;
             }
             return None;
         }
@@ -621,8 +723,9 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
         model = qp.get("model") or None;
         status = qp.get("status") or None;
         caller = qp.get("caller") or None;
+        root_only = qp.get("root_only", "").lower() in ("true", "1", "yes");
         data = store.get_traces(
-            limit=limit, offset=offset, model=model, status=status, caller=caller
+            limit=limit, offset=offset, model=model, status=status, caller=caller, root_only=root_only
         );
         return JSONResponse(content={"ok": True, "data": data});
     }
