@@ -4,6 +4,9 @@ This document provides a summary of new features, improvements, and bug fixes in
 
 ## byllm 0.6.4 (Unreleased)
 
+- **Add: Parent-child invocation tracking for nested `by llm()` calls**: `Model.invoke` now uses a `ContextVar` to propagate the current invocation ID, so nested `by llm()` calls automatically capture their parent. Each telemetry record includes a `parent_invocation_id` field, enabling external consumers (e.g., jac-scale) to reconstruct the full agent call tree.
+- **Add: `parent_invocation_id` forwarded to LiteLLM metadata**: `BaseLLM.make_model_params` now includes `jac_parent_invocation_id` in `agent_metadata`, allowing LiteLLM-level loggers to correlate individual API calls with the nested invocation hierarchy.
+
 ## byllm 0.6.3 (Latest Release)
 
 - **Add: `ModelPool` for LLM fallback and load-balancing**: Introduced `ModelPool` as a drop-in replacement for `Model` - use `by pool()` exactly like `by llm()`. Internally wraps a LiteLLM `Router` running in-process (no subprocess, no proxy server) that handles fallback, retries, and load-distribution across a list of `Model` instances. Exported from `byllm.lib`. Six routing strategies are supported: `"fallback"` (ordered priority, next model on failure), `"simple-shuffle"` (random pick per call - ideal for free-tier key rotation across multiple API keys), `"cost-based-routing"` (cheapest deployment via LiteLLM's built-in cost database), `"latency-based-routing"` (fastest by EWMA-tracked response time), `"usage-based-routing"` (lowest current TPM/RPM usage), and `"least-busy"` (fewest in-flight requests). Backward compatible - no changes needed to existing `by llm()` call sites.

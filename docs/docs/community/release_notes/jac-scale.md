@@ -8,6 +8,8 @@ This document provides a summary of new features, improvements, and bug fixes in
 
 - **Fix: Windows Compatibility for Local Sandbox**: Added platform guards for Unix-only APIs, cross-platform temp paths, Windows-compatible shell commands, --jac-cli sidecar support, and increased readiness timeout to 300s.
 
+- **Add: Nested LLM Trace Tree in Admin Dashboard**: The LLM Traces page now renders a fully nested, arbitrarily-deep call tree for `by llm()` invocations, with parent-child relationships resolved via byllm's `parent_invocation_id`.
+
 ## jac-scale 0.2.13 (Latest Release)
 
 - **jac-mcp included by default**: Added to the default Kubernetes package set in jac-scale.
