@@ -59,8 +59,10 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
                 start: float,
                 ctx_token: object
             ) -> object {
+                _completed = False;
                 try {
                     yield from gen;
+                    _completed = True;
                 } except Exception as inner_e {
                     _emit_agent_telemetry(
                         mt,
@@ -72,14 +74,16 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
                     );
                     raise;
                 } finally {
-                    _emit_agent_telemetry(
-                        mt,
-                        "[streaming]",
-                        model_name,
-                        (time.time() - start) * 1000,
-                        "success",
-                        None
-                    );
+                    if _completed {
+                        _emit_agent_telemetry(
+                            mt,
+                            "[streaming]",
+                            model_name,
+                            (time.time() - start) * 1000,
+                            "success",
+                            None
+                        );
+                    }
                     _current_invocation_id.reset(ctx_token);
                 }
             }

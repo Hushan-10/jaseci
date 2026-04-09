@@ -477,21 +477,31 @@ cl {
                 </div>;
         }
 
+        def appendChildren(
+            parentId: str,
+            depth: int,
+            items: list,
+            visited: list
+        ) {
+            if visited.indexOf(parentId) >= 0 { return; }
+            nextVisited = visited.concat([parentId]);
+            ch = childrenMap[parentId] or [];
+            for child in ch {
+                items.push({"trace": child, "depth": depth});
+                childId = child["invocation_id"] or "";
+                if childId and expandedIds.indexOf(childId) >= 0 {
+                    appendChildren(childId, depth + 1, items, nextVisited);
+                }
+            }
+        }
+
         def getDisplayItems -> list {
             items: list = [];
             for i in traces {
                 items.push({"trace": i, "depth": 0});
-                if expandedIds.indexOf(i["invocation_id"]) >= 0 {
-                    ch = childrenMap[i["invocation_id"]] or [];
-                    for j in ch {
-                        items.push({"trace": j, "depth": 1});
-                        if expandedIds.indexOf(j["invocation_id"]) >= 0 {
-                            gch = childrenMap[j["invocation_id"]] or [];
-                            for k in gch {
-                                items.push({"trace": k, "depth": 2});
-                            }
-                        }
-                    }
+                traceId = i["invocation_id"] or "";
+                if traceId and expandedIds.indexOf(traceId) >= 0 {
+                    appendChildren(traceId, 1, items, []);
                 }
             }
             return items;

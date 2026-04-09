@@ -288,6 +288,28 @@ obj TelemetryStore {
         }
     }
 
+    def _aggregate_descendants(
+        trace_id: str,
+        children_lookup: dict
+    ) -> dict {
+        # Walk all descendants of trace_id via BFS with cycle guard.
+        agg_tokens = 0;
+        agg_cost = 0.0;
+        agg_calls = 0;
+        worklist = list(children_lookup.get(trace_id, []));
+        visited = set();
+        while worklist {
+            desc = worklist.pop();
+            if desc.invocation_id in visited { continue; }
+            visited.add(desc.invocation_id);
+            agg_tokens += desc.total_tokens;
+            agg_cost += desc.total_cost;
+            agg_calls += desc.llm_call_count;
+            worklist.extend(children_lookup.get(desc.invocation_id, []));
+        }
+        return {"tokens": agg_tokens, "cost": agg_cost, "calls": agg_calls};
+    }
+
     def get_traces(
         limit: int = 50,
         offset: int = 0,
@@ -353,20 +375,12 @@ obj TelemetryStore {
                 direct_children = children_lookup.get(t.invocation_id, []);
                 d["child_count"] = len(direct_children);
                 # Recursively aggregate all descendant costs/tokens.
-                agg_tokens = t.total_tokens;
-                agg_cost = t.total_cost;
-                agg_calls = t.llm_call_count;
-                worklist = list(direct_children);
-                while worklist {
-                    desc = worklist.pop();
-                    agg_tokens += desc.total_tokens;
-                    agg_cost += desc.total_cost;
-                    agg_calls += desc.llm_call_count;
-                    worklist.extend(children_lookup.get(desc.invocation_id, []));
-                }
-                d["aggregated_total_tokens"] = agg_tokens;
-                d["aggregated_total_cost"] = round(agg_cost, 6);
-                d["aggregated_llm_call_count"] = agg_calls;
+                _agg = self._aggregate_descendants(
+                    t.invocation_id, children_lookup
+                );
+                d["aggregated_total_tokens"] = t.total_tokens + _agg["tokens"];
+                d["aggregated_total_cost"] = round(t.total_cost + _agg["cost"], 6);
+                d["aggregated_llm_call_count"] = t.llm_call_count + _agg["calls"];
                 enriched.append(d);
             }
             return {
@@ -405,38 +419,23 @@ obj TelemetryStore {
                     # Enrich each child with its own child_count and aggregated stats.
                     gc = children_lookup.get(ct.invocation_id, []);
                     cd["child_count"] = len(gc);
-                    ct_agg_t = ct.total_tokens;
-                    ct_agg_c = ct.total_cost;
-                    ct_agg_l = ct.llm_call_count;
-                    ct_wl = list(gc);
-                    while ct_wl {
-                        ct_desc = ct_wl.pop();
-                        ct_agg_t += ct_desc.total_tokens;
-                        ct_agg_c += ct_desc.total_cost;
-                        ct_agg_l += ct_desc.llm_call_count;
-                        ct_wl.extend(children_lookup.get(ct_desc.invocation_id, []));
-                    }
-                    cd["aggregated_total_tokens"] = ct_agg_t;
-                    cd["aggregated_total_cost"] = round(ct_agg_c, 6);
-                    cd["aggregated_llm_call_count"] = ct_agg_l;
+                    _ct_agg = self._aggregate_descendants(
+                        ct.invocation_id, children_lookup
+                    );
+                    cd["aggregated_total_tokens"] = ct.total_tokens + _ct_agg["tokens"];
+                    cd["aggregated_total_cost"] = round(ct.total_cost + _ct_agg["cost"], 6);
+                    cd["aggregated_llm_call_count"] = ct.llm_call_count + _ct_agg["calls"];
                     enriched_children.append(cd);
                 }
                 result["child_traces"] = enriched_children;
+                result["child_count"] = len(child_traces);
                 # Aggregate all descendant costs/tokens recursively.
-                agg_tokens = result["total_tokens"];
-                agg_cost = result["total_cost"];
-                agg_llm_calls = result["llm_call_count"];
-                worklist = list(child_traces);
-                while worklist {
-                    desc = worklist.pop();
-                    agg_tokens += desc.total_tokens;
-                    agg_cost += desc.total_cost;
-                    agg_llm_calls += desc.llm_call_count;
-                    worklist.extend(children_lookup.get(desc.invocation_id, []));
-                }
-                result["aggregated_total_tokens"] = agg_tokens;
-                result["aggregated_total_cost"] = round(agg_cost, 6);
-                result["aggregated_llm_call_count"] = agg_llm_calls;
+                _top_agg = self._aggregate_descendants(
+                    invocation_id, children_lookup
+                );
+                result["aggregated_total_tokens"] = result["total_tokens"] + _top_agg["tokens"];
+                result["aggregated_total_cost"] = round(result["total_cost"] + _top_agg["cost"], 6);
+                result["aggregated_llm_call_count"] = result["llm_call_count"] + _top_agg["calls"];
                 return result;
             }
             return None;
@@ -450,6 +449,7 @@ obj TelemetryStore {
             if not traces_list {
                 return {
                     "total_invocations": 0,
+                    "root_invocations": 0,
                     "total_llm_calls": 0,
                     "total_tokens": 0,
                     "total_cost": 0.0,
@@ -460,6 +460,11 @@ obj TelemetryStore {
                 };
             }
             total_invocations = len(traces_list);
+            root_invocations = sum(
+                1
+                for t in traces_list
+                if t.parent_invocation_id is None
+            );
             total_llm_calls = sum(t.llm_call_count for t in traces_list);
             total_tokens = sum(t.total_tokens for t in traces_list);
             total_cost = sum(t.total_cost for t in traces_list);
@@ -511,6 +516,7 @@ obj TelemetryStore {
             }
             return {
                 "total_invocations": total_invocations,
+                "root_invocations": root_invocations,
                 "total_llm_calls": total_llm_calls,
                 "total_tokens": total_tokens,
                 "total_cost": round(total_cost, 6),
