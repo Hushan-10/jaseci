@@ -477,13 +477,10 @@ cl {
                 </div>;
         }
 
-        def appendChildren(
-            parentId: str,
-            depth: int,
-            items: list,
-            visited: list
-        ) {
-            if visited.indexOf(parentId) >= 0 { return; }
+        def appendChildren(parentId: str, depth: int, items: list, visited: list) {
+            if visited.indexOf(parentId) >= 0 {
+                return;
+            }
             nextVisited = visited.concat([parentId]);
             ch = childrenMap[parentId] or [];
             for child in ch {

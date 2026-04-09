@@ -288,10 +288,7 @@ obj TelemetryStore {
         }
     }
 
-    def _aggregate_descendants(
-        trace_id: str,
-        children_lookup: dict
-    ) -> dict {
+    def _aggregate_descendants(trace_id: str, children_lookup: dict) -> dict {
         # Walk all descendants of trace_id via BFS with cycle guard.
         agg_tokens = 0;
         agg_cost = 0.0;
@@ -300,7 +297,9 @@ obj TelemetryStore {
         visited = set();
         while worklist {
             desc = worklist.pop();
-            if desc.invocation_id in visited { continue; }
+            if desc.invocation_id in visited {
+                continue;
+            }
             visited.add(desc.invocation_id);
             agg_tokens += desc.total_tokens;
             agg_cost += desc.total_cost;
@@ -375,9 +374,7 @@ obj TelemetryStore {
                 direct_children = children_lookup.get(t.invocation_id, []);
                 d["child_count"] = len(direct_children);
                 # Recursively aggregate all descendant costs/tokens.
-                _agg = self._aggregate_descendants(
-                    t.invocation_id, children_lookup
-                );
+                _agg = self._aggregate_descendants(t.invocation_id, children_lookup);
                 d["aggregated_total_tokens"] = t.total_tokens + _agg["tokens"];
                 d["aggregated_total_cost"] = round(t.total_cost + _agg["cost"], 6);
                 d["aggregated_llm_call_count"] = t.llm_call_count + _agg["calls"];
@@ -423,19 +420,27 @@ obj TelemetryStore {
                         ct.invocation_id, children_lookup
                     );
                     cd["aggregated_total_tokens"] = ct.total_tokens + _ct_agg["tokens"];
-                    cd["aggregated_total_cost"] = round(ct.total_cost + _ct_agg["cost"], 6);
-                    cd["aggregated_llm_call_count"] = ct.llm_call_count + _ct_agg["calls"];
+                    cd["aggregated_total_cost"] = round(
+                        ct.total_cost + _ct_agg["cost"], 6
+                    );
+                    cd["aggregated_llm_call_count"] = ct.llm_call_count + _ct_agg[
+                        "calls"
+                    ];
                     enriched_children.append(cd);
                 }
                 result["child_traces"] = enriched_children;
                 result["child_count"] = len(child_traces);
                 # Aggregate all descendant costs/tokens recursively.
-                _top_agg = self._aggregate_descendants(
-                    invocation_id, children_lookup
+                _top_agg = self._aggregate_descendants(invocation_id, children_lookup);
+                result["aggregated_total_tokens"] = result["total_tokens"] + _top_agg[
+                    "tokens"
+                ];
+                result["aggregated_total_cost"] = round(
+                    result["total_cost"] + _top_agg["cost"], 6
                 );
-                result["aggregated_total_tokens"] = result["total_tokens"] + _top_agg["tokens"];
-                result["aggregated_total_cost"] = round(result["total_cost"] + _top_agg["cost"], 6);
-                result["aggregated_llm_call_count"] = result["llm_call_count"] + _top_agg["calls"];
+                result["aggregated_llm_call_count"] = result["llm_call_count"] + _top_agg[
+                    "calls"
+                ];
                 return result;
             }
             return None;
