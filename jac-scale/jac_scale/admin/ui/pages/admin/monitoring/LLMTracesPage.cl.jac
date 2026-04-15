@@ -167,17 +167,13 @@ cl {
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-slate-500 mb-1">
-                                        Model
-                                    </div>
+                                    <div className="text-slate-500 mb-1">Model</div>
                                     <div className="text-teal-300 font-mono text-sm">
                                         {selectedTrace["model"] or "N/A"}
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-slate-500 mb-1">
-                                        Status
-                                    </div>
+                                    <div className="text-slate-500 mb-1">Status</div>
                                     <span
                                         className={getStatusBadge(
                                             selectedTrace["status"] or "unknown"
@@ -187,34 +183,26 @@ cl {
                                     </span>
                                 </div>
                                 <div>
-                                    <div className="text-slate-500 mb-1">
-                                        Tokens
-                                    </div>
+                                    <div className="text-slate-500 mb-1">Tokens</div>
                                     <div className="text-white">
                                         {formatTokens(
                                             selectedTrace["total_tokens"] or 0
                                         )}{(
-                                            selectedTrace[
-                                                "aggregated_total_tokens"
-                                            ]
+                                            selectedTrace["aggregated_total_tokens"]
                                             or 0
                                         ) > (selectedTrace["total_tokens"] or 0)
                                         and <span
                                             className="text-slate-500 text-xs ml-1"
                                         >
                                             {"(tree: " + formatTokens(
-                                                selectedTrace[
-                                                    "aggregated_total_tokens"
-                                                ]
+                                                selectedTrace["aggregated_total_tokens"]
                                                 or 0
                                             ) + ")"}
                                         </span>}
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-slate-500 mb-1">
-                                        Cost
-                                    </div>
+                                    <div className="text-slate-500 mb-1">Cost</div>
                                     <div className="text-yellow-400">
                                         {formatCost(selectedTrace["total_cost"] or 0)}{(
                                             selectedTrace["aggregated_total_cost"] or 0
@@ -223,18 +211,14 @@ cl {
                                             className="text-slate-500 text-xs ml-1"
                                         >
                                             {"(tree: " + formatCost(
-                                                selectedTrace[
-                                                    "aggregated_total_cost"
-                                                ]
+                                                selectedTrace["aggregated_total_cost"]
                                                 or 0
                                             ) + ")"}
                                         </span>}
                                     </div>
                                 </div>
                                 <div>
-                                    <div className="text-slate-500 mb-1">
-                                        Latency
-                                    </div>
+                                    <div className="text-slate-500 mb-1">Latency</div>
                                     <div className="text-white">
                                         {formatLatency(
                                             selectedTrace["total_latency_ms"] or 0
@@ -540,24 +524,12 @@ cl {
                     <div
                         className="flex items-center px-4 py-2.5 border-b border-slate-700 text-xs text-slate-500 font-semibold uppercase tracking-wider"
                     >
-                        <div className="flex-1">
-                            Trace
-                        </div>
-                        <div className="w-14 text-right">
-                            Calls
-                        </div>
-                        <div className="w-20 text-right">
-                            Tokens
-                        </div>
-                        <div className="w-24 text-right">
-                            Cost
-                        </div>
-                        <div className="w-16 text-right">
-                            Latency
-                        </div>
-                        <div className="w-16 text-right">
-                            Time
-                        </div>
+                        <div className="flex-1">Trace</div>
+                        <div className="w-14 text-right">Calls</div>
+                        <div className="w-20 text-right">Tokens</div>
+                        <div className="w-24 text-right">Cost</div>
+                        <div className="w-16 text-right">Latency</div>
+                        <div className="w-16 text-right">Time</div>
                     </div>
                     {[
                         <div
@@ -576,21 +548,18 @@ cl {
                                 {(item["trace"]["child_count"] or 0) > 0
                                 and <button
                                     className="flex-shrink-0 w-5 h-5 flex items-center justify-center text-slate-400 hover:text-teal-400 rounded hover:bg-slate-700/50"
-                                    onClick={lambda e: any { e.stopPropagation();toggleExpand(
-                                        item["trace"]["invocation_id"]
-                                    );}}
+                                    onClick={lambda e: any {
+                                        e.stopPropagation();
+                                        toggleExpand(item["trace"]["invocation_id"]);
+                                    }}
                                 >
                                     {expandedIds.indexOf(
                                         item["trace"]["invocation_id"]
                                     ) >= 0
-                                    and <span className="text-xs">
-                                        ▼
-                                    </span>}{expandedIds.indexOf(
+                                    and <span className="text-xs">▼</span>}{expandedIds.indexOf(
                                         item["trace"]["invocation_id"]
                                     ) < 0
-                                    and <span className="text-xs">
-                                        ▶
-                                    </span>}
+                                    and <span className="text-xs">▶</span>}
                                 </button>}
                                 {(item["trace"]["child_count"] or 0) == 0
                                 and <span className="flex-shrink-0 w-5"/>}
