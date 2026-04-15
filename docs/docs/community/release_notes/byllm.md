@@ -4,6 +4,8 @@ This document provides a summary of new features, improvements, and bug fixes in
 
 ## byllm 0.6.4 (Unreleased)
 
+- **Add: Automatic Anthropic prompt caching**: Caches system prompt, tool schemas, and ReAct conversation history across iterations for Claude models, significantly reducing input token costs. Enabled by default.
+- **Fix: Emit `usage` StreamEvent for no-tool streaming calls**: The usage event now fires for every streaming invocation, not just ReAct loops with tools, so token accounting is complete across all `by llm()` shapes.
 - **Add: Parent-child invocation tracking for nested `by llm()` calls**: `Model.invoke` now uses a `ContextVar` to propagate the current invocation ID, so nested `by llm()` calls automatically capture their parent. Each telemetry record includes a `parent_invocation_id` field, enabling external consumers (e.g., jac-scale) to reconstruct the full agent call tree.
 - **Add: `parent_invocation_id` forwarded to LiteLLM metadata**: `BaseLLM.make_model_params` now includes `jac_parent_invocation_id` in `agent_metadata`, allowing LiteLLM-level loggers to correlate individual API calls with the nested invocation hierarchy.
 

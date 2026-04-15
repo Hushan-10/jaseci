@@ -67,11 +67,11 @@ cl {
         useEffect(lambda { loadTraces();}, []);
 
         useEffect(
-            lambda -> any { if not autoRefresh {
-                return undefined;
-            }interval = setInterval(lambda { loadTraces();}, 15000);return lambda { clearInterval(
-                interval
-            );}; },
+            lambda -> any {
+                if not autoRefresh { return undefined;  }
+                interval = setInterval(lambda { loadTraces();}, 15000);
+                return lambda { clearInterval(interval);};
+            },
             [autoRefresh]
         );
 
@@ -120,18 +120,14 @@ cl {
         if isLoading {
             return
                 <div className="flex items-center justify-center h-64">
-                    <div className="text-teal-400 text-lg">
-                        Loading traces...
-                    </div>
+                    <div className="text-teal-400 text-lg">Loading traces...</div>
                 </div>;
         }
 
         if errorMsg {
             return
                 <div className="flex items-center justify-center h-64">
-                    <div className="text-red-400 text-lg">
-                        {errorMsg}
-                    </div>
+                    <div className="text-red-400 text-lg">{errorMsg}</div>
                 </div>;
         }
 
@@ -140,20 +136,19 @@ cl {
                 <div className="space-y-4">
                     <div className="flex items-center gap-3">
                         <Button
-                            onClick={lambda { showDetail = False;selectedTrace = {};}}
+                            onClick={lambda {
+                                showDetail = False;
+                                selectedTrace = {};
+                            }}
                             variant="secondary"
                         >
                             Back to Traces
                         </Button>
-                        <h2 className="text-xl font-bold text-white">
-                            Trace Detail
-                        </h2>
+                        <h2 className="text-xl font-bold text-white">Trace Detail</h2>
                     </div>
                     {detailLoading
                     and <div className="flex items-center justify-center h-32">
-                        <div className="text-teal-400">
-                            Loading trace detail...
-                        </div>
+                        <div className="text-teal-400">Loading trace detail...</div>
                     </div>}
                     {not detailLoading
                     and selectedTrace["invocation_id"]
@@ -166,9 +161,7 @@ cl {
                             </h3>
                             <div className="grid grid-cols-3 gap-4 text-sm">
                                 <div>
-                                    <div className="text-slate-500 mb-1">
-                                        Caller
-                                    </div>
+                                    <div className="text-slate-500 mb-1">Caller</div>
                                     <div className="text-purple-300 font-mono">
                                         {selectedTrace["caller_name"] or "N/A"}
                                     </div>
@@ -507,9 +500,7 @@ cl {
         return
             <div className="space-y-6">
                 <div className="flex items-center justify-between">
-                    <h2 className="text-xl font-bold text-white">
-                        LLM Traces
-                    </h2>
+                    <h2 className="text-xl font-bold text-white">LLM Traces</h2>
                     <div className="flex items-center gap-3">
                         <label
                             className="flex items-center gap-2 text-sm text-slate-400 cursor-pointer"
@@ -523,7 +514,10 @@ cl {
                             Auto-refresh
                         </label>
                         <Button
-                            onClick={lambda { isLoading = True;loadTraces();}}
+                            onClick={lambda {
+                                isLoading = True;
+                                loadTraces();
+                            }}
                             variant="secondary"
                         >
                             Refresh
@@ -534,9 +528,7 @@ cl {
                 and <div
                     className="bg-slate-900 border border-slate-800 rounded-lg p-8 text-center"
                 >
-                    <div className="text-slate-500 text-lg mb-2">
-                        No traces yet
-                    </div>
+                    <div className="text-slate-500 text-lg mb-2">No traces yet</div>
                     <div className="text-slate-600 text-sm">
                         Make some LLM calls to see traces here
                     </div>

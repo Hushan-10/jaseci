@@ -654,8 +654,7 @@ impl JacAPIServerLLMTelemetry.register_llm_telemetry_endpoints -> None {
                                 if start_time?.timestamp
                                 else time.time(),
                             "metadata": metadata,
-                            "error_str": slp.get("error_str")
-                            or str(response_obj)[:500]
+                            "error_str": slp.get("error_str") or str(response_obj)[:500]
                         }
                     );
                 } except Exception as e {
