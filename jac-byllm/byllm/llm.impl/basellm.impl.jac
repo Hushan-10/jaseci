@@ -134,21 +134,27 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
                 else getattr(usage, "total_tokens", 0)
         );
         if resp.tool_calls {
-            for tool_call in resp.tool_calls {
-                if tool_call.is_finish_call() {
-                    # If streaming is enabled, make a new streaming call
-                    mt_run.add_message(tool_call());
-                    # to generate the final answer based on all context
-                    if mt_run.stream {
-                        return self._stream_final_answer(mt_run);
-                    }
-                    return tool_call.get_output();
-                } else {
-                    result_msg = tool_call();
-                    last_tool = tool_call.tool.get_name();
+            # Phase 1: route through batch dispatcher (default: sequential).
+            # Finish call is handled separately — it exits the ReAct loop.
+            non_finish_calls = [tc for tc in resp.tool_calls if not tc.is_finish_call()];
+            finish_calls = [tc for tc in resp.tool_calls if tc.is_finish_call()];
+
+            if non_finish_calls {
+                batch_results = self._dispatch_tool_batch(non_finish_calls);
+                for (tc, result_msg, _ms) in batch_results {
+                    last_tool = tc.tool.get_name();
                     last_result = str(result_msg.content)[:500];
                     mt_run.add_message(result_msg);
                 }
+            }
+
+            if finish_calls {
+                finish_tc = finish_calls[0];
+                mt_run.add_message(finish_tc());
+                if mt_run.stream {
+                    return self._stream_final_answer(mt_run);
+                }
+                return finish_tc.get_output();
             }
         } else {
             # LLM returned plain text without calling any tool.
@@ -402,6 +408,36 @@ impl BaseLLM._force_final_answer(mt_run: MTRuntime) -> object {
     }
 }
 
+"""Execute a batch of non-finish tool calls and return results in input order.
+
+Phase 1 default: sequential — behaviorally identical to the old inline loop.
+Phase 4: when tool_scheduler is installed (by jac-code after checking the
+JAC_CODER_PARALLEL_TOOLS env var), the entire batch is delegated to that
+callable. The scheduler decides whether to run tools in parallel or fall
+back to sequential based on tool classification.
+
+Returns list of (ToolCall, ToolCallResultMsg, duration_ms) in SAME ORDER as input.
+Caller is responsible for mt_run.add_message() and event emission.
+"""
+impl BaseLLM._dispatch_tool_batch(tool_calls: list) -> list {
+    # Phase 4: delegate to installed scheduler (default None = sequential).
+    if self.tool_scheduler {
+        return self.tool_scheduler(tool_calls);
+    }
+
+    # Phase 1 default: sequential — same behavior as pre-Phase-1 inline loop.
+    import time as _time;
+    results = [];
+    for tc in tool_calls {
+        t0 = _time.time();
+        msg = tc();
+        ms = int((_time.time() - t0) * 1000);
+        results.append((tc, msg, ms));
+    }
+    return results;
+}
+
+
 """Stream the final answer after ReAct tool calls complete.
 
 Creates a new streaming LLM call with all context from tool calls
@@ -595,6 +631,8 @@ impl BaseLLM._invoke_streaming(
                 break;
             }
 
+            import time as _time;
+            _llm_t0 = _time.time();
             try {
                 resp = self.dispatch_no_streaming(mt_run);
             } except OutputConversionError {
@@ -608,6 +646,7 @@ impl BaseLLM._invoke_streaming(
                 );
                 break;
             }
+            _llm_ms = int((_time.time() - _llm_t0) * 1000);
             self._usage_history.append(resp.usage);
 
             usage = resp.usage or {};
@@ -615,6 +654,12 @@ impl BaseLLM._invoke_streaming(
                 usage.get("total_tokens", 0)
                     if isinstance(usage, dict)
                     else getattr(usage, "total_tokens", 0)
+            );
+
+            # Metrics: emit LLM call duration for this iteration
+            yield StreamEvent(
+                event_type="llm_timing",
+                data={"duration_ms": _llm_ms, "iteration": iter_count}
             );
 
             # Yield thought if the LLM produced reasoning text
@@ -626,58 +671,75 @@ impl BaseLLM._invoke_streaming(
             }
 
             if resp.tool_calls {
-                for tool_call in resp.tool_calls {
-                    if tool_call.is_finish_call() {
-                        mt_run.add_message(tool_call());
-                        yield StreamEvent(
-                            event_type="steps_done", data={"iterations": iter_count}
-                        );
-                        for token in self._stream_final_answer(mt_run) {
-                            if token {
-                                yield StreamEvent(
-                                    event_type="chunk", data={"content": token}
-                                );
-                            }
-                        }
-                        break;
-                    } else {
-                        # Yield tool_call event before execution
+                # Phase 1: route through batch dispatcher (default: sequential).
+                # Emit all tool_call events first, dispatch the batch, then emit results.
+                # This ordering matches Phase 4's parallel pattern:
+                #   tool_call events (A, B, ...) → concurrent execution → tool_result events (A, B, ...)
+                non_finish_calls = [tc for tc in resp.tool_calls if not tc.is_finish_call()];
+                finish_calls = [tc for tc in resp.tool_calls if tc.is_finish_call()];
+
+                if non_finish_calls {
+                    # Announce all tools before any execution starts
+                    for tc in non_finish_calls {
                         yield StreamEvent(
                             event_type="tool_call",
                             data={
-                                "tool": tool_call.tool.get_name(),
-                                "args": tool_call.args,
-                                "call_id": tool_call.call_id,
+                                "tool": tc.tool.get_name(),
+                                "args": tc.args,
+                                "call_id": tc.call_id,
                                 "iteration": iter_count
                             }
                         );
-                        # Execute the tool
-                        result_msg = tool_call();
-                        last_tool = tool_call.tool.get_name();
-                        # Truncate result for the event stream (full result stays in mt_run messages).
-                        # Configurable via call_params["max_tool_result_length"], default 500.
-                        max_result_len = int(
-                            mt_run.call_params.get("max_tool_result_length")
-                            or self.call_params.get("max_tool_result_length")
-                            or _call_params_config.get("max_tool_result_length")
-                            or 500
-                        );
+                    }
+
+                    # Execute the batch (default: sequential, same wall-clock as before)
+                    batch_results = self._dispatch_tool_batch(non_finish_calls);
+
+                    max_result_len = int(
+                        mt_run.call_params.get("max_tool_result_length")
+                        or self.call_params.get("max_tool_result_length")
+                        or _call_params_config.get("max_tool_result_length")
+                        or 500
+                    );
+                    for (tc, result_msg, tool_ms) in batch_results {
                         truncated_result = result_msg.content[:max_result_len];
+                        last_tool = tc.tool.get_name();
                         last_result = truncated_result;
                         yield StreamEvent(
                             event_type="tool_result",
                             data={
-                                "tool": tool_call.tool.get_name(),
+                                "tool": tc.tool.get_name(),
                                 "result": truncated_result,
-                                "call_id": tool_call.call_id,
+                                "call_id": tc.call_id,
+                                "iteration": iter_count
+                            }
+                        );
+                        yield StreamEvent(
+                            event_type="tool_timing",
+                            data={
+                                "tool": tc.tool.get_name(),
+                                "duration_ms": tool_ms,
+                                "call_id": tc.call_id,
                                 "iteration": iter_count
                             }
                         );
                         mt_run.add_message(result_msg);
                     }
                 }
-                # If we broke out of the for loop due to finish_tool, break the while loop too
-                if tool_call.is_finish_call() {
+
+                if finish_calls {
+                    finish_tc = finish_calls[0];
+                    mt_run.add_message(finish_tc());
+                    yield StreamEvent(
+                        event_type="steps_done", data={"iterations": iter_count}
+                    );
+                    for token in self._stream_final_answer(mt_run) {
+                        if token {
+                            yield StreamEvent(
+                                event_type="chunk", data={"content": token}
+                            );
+                        }
+                    }
                     break;
                 }
             } else {
