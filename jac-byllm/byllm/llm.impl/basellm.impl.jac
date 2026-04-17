@@ -148,8 +148,18 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
             ];
 
             if non_finish_calls {
-                batch_results = self._dispatch_tool_batch(non_finish_calls);
-                for (tc, result_msg, _ms) in batch_results {
+                # Collect results from dispatch_batch generator, then
+                # add messages in input order for deterministic history.
+                import from byllm.parallel { dispatch_batch, _index_by_identity }
+                raw_results: list = list(dispatch_batch(non_finish_calls));
+                # Reorder by input position using identity comparison.
+                ordered: dict = {};
+                for r in raw_results {
+                    idx = _index_by_identity(non_finish_calls, r[0]);
+                    ordered[idx] = r;
+                }
+                for i in range(len(non_finish_calls)) {
+                    (tc, result_msg, _ms) = ordered[i];
                     last_tool = tc.tool.get_name();
                     last_result = str(result_msg.content)[:500];
                     mt_run.add_message(result_msg);
@@ -213,6 +223,20 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
 
     messages = mt_run.get_msg_list();
     tools = mt_run.get_tool_list() or None;
+
+    # System prompt nudge: when tools are present, encourage the LLM
+    # to batch independent tool calls in a single response.
+    # Callers can opt out per-call with parallel_hint=False in call_params.
+    if tools and mt_run.call_params.get("parallel_hint", True) and messages and len(messages) > 0 {
+        first_msg = messages[0];
+        if isinstance(first_msg, dict) and first_msg.get("role") == "system" {
+            import from byllm.parallel { _PARALLEL_TOOL_HINT }
+            content = first_msg.get("content", "");
+            if isinstance(content, str) and _PARALLEL_TOOL_HINT not in content {
+                first_msg["content"] = content + _PARALLEL_TOOL_HINT;
+            }
+        }
+    }
 
     if _is_prompt_caching_eligible(self.model_name) {
         _apply_prompt_caching(messages, tools);
@@ -420,35 +444,6 @@ impl BaseLLM._force_final_answer(mt_run: MTRuntime) -> object {
     } finally {
         mt_run.tools = original_tools;
     }
-}
-
-"""Execute a batch of non-finish tool calls and return results in input order.
-
-Phase 1 default: sequential — behaviorally identical to the old inline loop.
-Phase 4: when tool_scheduler is installed (by jac-code after checking the
-JAC_CODER_PARALLEL_TOOLS env var), the entire batch is delegated to that
-callable. The scheduler decides whether to run tools in parallel or fall
-back to sequential based on tool classification.
-
-Returns list of (ToolCall, ToolCallResultMsg, duration_ms) in SAME ORDER as input.
-Caller is responsible for mt_run.add_message() and event emission.
-"""
-impl BaseLLM._dispatch_tool_batch(tool_calls: list) -> list {
-    # Phase 4: delegate to installed scheduler (default None = sequential).
-    if self.tool_scheduler {
-        return self.tool_scheduler(tool_calls);
-    }
-
-    # Phase 1 default: sequential — same behavior as pre-Phase-1 inline loop.
-    import time as _time;
-    results = [];
-    for tc in tool_calls {
-        t0 = _time.time();
-        msg = tc();
-        ms = int((_time.time() - t0) * 1000);
-        results.append((tc, msg, ms));
-    }
-    return results;
 }
 
 
@@ -714,8 +709,10 @@ impl BaseLLM._invoke_streaming(
                         );
                     }
 
-                    # Execute the batch (default: sequential, same wall-clock as before)
-                    batch_results = self._dispatch_tool_batch(non_finish_calls);
+                    # Execute via dispatch_batch — streams results as workers complete.
+                    # Collect all results, then add to mt_run in input order.
+                    import from byllm.parallel { dispatch_batch, _index_by_identity }
+                    raw_results: list = [];
 
                     max_result_len = int(
                         mt_run.call_params.get("max_tool_result_length")
@@ -723,7 +720,8 @@ impl BaseLLM._invoke_streaming(
                         or _call_params_config.get("max_tool_result_length")
                         or 500
                     );
-                    for (tc, result_msg, tool_ms) in batch_results {
+
+                    for (tc, result_msg, tool_ms) in dispatch_batch(non_finish_calls) {
                         truncated_result = result_msg.content[:max_result_len];
                         last_tool = tc.tool.get_name();
                         last_result = truncated_result;
@@ -745,7 +743,17 @@ impl BaseLLM._invoke_streaming(
                                 "iteration": iter_count
                             }
                         );
-                        mt_run.add_message(result_msg);
+                        raw_results.append((tc, result_msg, tool_ms));
+                    }
+
+                    # Add messages to mt_run in input order for deterministic history.
+                    ordered: dict = {};
+                    for r in raw_results {
+                        idx = _index_by_identity(non_finish_calls, r[0]);
+                        ordered[idx] = r;
+                    }
+                    for i in range(len(non_finish_calls)) {
+                        mt_run.add_message(ordered[i][1]);
                     }
                 }
 
