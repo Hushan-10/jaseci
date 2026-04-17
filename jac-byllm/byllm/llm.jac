@@ -67,14 +67,7 @@ obj BaseLLM {
         config: dict = {},
         api_key: str = "",
         call_params: dict[(str, object)] = {},
-        _usage_history: list = [],
-        # optional parallel scheduler injected by the caller.
-        # When set, _dispatch_tool_batch delegates the entire batch to this
-        # callable instead of running sequentially.
-        # Signature: (tool_calls: list) -> list[(ToolCall, ToolCallResultMsg, ms)]
-        # jac-code installs parallel_tool_scheduler here when the feature flag
-        # JAC_CODER_PARALLEL_TOOLS is set. Default None = sequential.
-        tool_scheduler: Any = None;
+        _usage_history: list = [];
 
     def __call__(**kwargs: object) -> BaseLLM;
     def invoke(mt_run: MTRuntime) -> object;
@@ -93,19 +86,6 @@ obj BaseLLM {
     ) -> Generator[StreamEvent, None, None];
 
     def _invoke_streaming(mt_run: MTRuntime) -> Generator[StreamEvent, None, None];
-    """Execute a batch of non-finish tool calls and return results in input order.
-
-    default: sequential — byte-for-byte equivalent to the old inline loop.
-     jac-code installs a parallel scheduler by setting
-    `llm.tool_scheduler = my_classifier_fn` after constructing the model.
-
-    Contract:
-    - Input: list of ToolCall objects, all non-finish calls
-    - Output: list of (ToolCall, ToolCallResultMsg, duration_ms) in SAME ORDER as input
-    - Must NOT mutate mt_run; caller handles mt_run.add_message()
-    - A failing tool must return (tc, error_result_msg, ms) — not raise
-    """
-    def _dispatch_tool_batch(tool_calls: list) -> list;
 }
 
 """Mock LLM connector that simulates responses for testing.
