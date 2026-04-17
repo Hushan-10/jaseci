@@ -15,10 +15,8 @@ import from byllm.exceptions {
 }
 import from byllm.telemetry { register_agent_callback }
 import from byllm.parallel {
-    default_parallel_scheduler,
-    mark_parallel_safe,
-    parallel_dispatch,
-    sequential_dispatch
+    dispatch_batch,
+    mark_serialize
 }
 
 glob by = JacRuntime.by ,
@@ -42,8 +40,6 @@ glob by = JacRuntime.by ,
          'StreamEvent',
          'Video',
          'register_agent_callback',
-         'default_parallel_scheduler',
-         'mark_parallel_safe',
-         'parallel_dispatch',
-         'sequential_dispatch'
+         'dispatch_batch',
+         'mark_serialize'
      ];
