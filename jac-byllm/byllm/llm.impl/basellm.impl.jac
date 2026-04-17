@@ -136,8 +136,16 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
         if resp.tool_calls {
             # Phase 1: route through batch dispatcher (default: sequential).
             # Finish call is handled separately — it exits the ReAct loop.
-            non_finish_calls = [tc for tc in resp.tool_calls if not tc.is_finish_call()];
-            finish_calls = [tc for tc in resp.tool_calls if tc.is_finish_call()];
+            non_finish_calls = [
+                tc
+                for tc in resp.tool_calls
+                if not tc.is_finish_call()
+            ];
+            finish_calls = [
+                tc
+                for tc in resp.tool_calls
+                if tc.is_finish_call()
+            ];
 
             if non_finish_calls {
                 batch_results = self._dispatch_tool_batch(non_finish_calls);
@@ -680,8 +688,16 @@ impl BaseLLM._invoke_streaming(
                 # Emit all tool_call events first, dispatch the batch, then emit results.
                 # This ordering matches Phase 4's parallel pattern:
                 #   tool_call events (A, B, ...) → concurrent execution → tool_result events (A, B, ...)
-                non_finish_calls = [tc for tc in resp.tool_calls if not tc.is_finish_call()];
-                finish_calls = [tc for tc in resp.tool_calls if tc.is_finish_call()];
+                non_finish_calls = [
+                    tc
+                    for tc in resp.tool_calls
+                    if not tc.is_finish_call()
+                ];
+                finish_calls = [
+                    tc
+                    for tc in resp.tool_calls
+                    if tc.is_finish_call()
+                ];
 
                 if non_finish_calls {
                     # Announce all tools before any execution starts

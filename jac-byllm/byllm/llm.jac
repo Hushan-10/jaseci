@@ -93,7 +93,6 @@ obj BaseLLM {
     ) -> Generator[StreamEvent, None, None];
 
     def _invoke_streaming(mt_run: MTRuntime) -> Generator[StreamEvent, None, None];
-
     """Execute a batch of non-finish tool calls and return results in input order.
 
     default: sequential — byte-for-byte equivalent to the old inline loop.

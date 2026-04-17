@@ -20,8 +20,8 @@ import logging;
 import from concurrent.futures { ThreadPoolExecutor, as_completed }
 import from byllm.types { ToolCallResultMsg }
 
-glob _MAX_WORKERS: int = 4;
-glob _plog = logging.getLogger("byllm.parallel");
+glob _MAX_WORKERS: int = 4,
+     _plog = logging.getLogger("byllm.parallel");
 
 
 """Mark one or more tool functions as parallel-safe.
@@ -203,7 +203,11 @@ def default_parallel_scheduler(tool_calls: list) -> list {
     speedup = round(sum_ms / wall_ms, 2) if wall_ms > 0 else 0.0;
     _plog.info(
         "batch done=parallel size=%d workers=%d wall_ms=%d sum_tool_ms=%d speedup=%sx",
-        n, workers, wall_ms, sum_ms, speedup
+        n,
+        workers,
+        wall_ms,
+        sum_ms,
+        speedup
     );
 
     return results;
