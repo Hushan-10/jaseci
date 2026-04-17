@@ -14,6 +14,12 @@ import from byllm.exceptions {
     ConfigurationError
 }
 import from byllm.telemetry { register_agent_callback }
+import from byllm.parallel {
+    default_parallel_scheduler,
+    mark_parallel_safe,
+    parallel_dispatch,
+    sequential_dispatch
+}
 
 glob by = JacRuntime.by ,
      __all__ = [
@@ -35,5 +41,9 @@ glob by = JacRuntime.by ,
          'MTRuntime',
          'StreamEvent',
          'Video',
-         'register_agent_callback'
+         'register_agent_callback',
+         'default_parallel_scheduler',
+         'mark_parallel_safe',
+         'parallel_dispatch',
+         'sequential_dispatch'
      ];
