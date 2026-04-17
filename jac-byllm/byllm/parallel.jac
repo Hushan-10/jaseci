@@ -1,79 +1,153 @@
-"""Reusable parallel tool-calling executor for byllm.
+"""Parallel tool-calling engine for byllm.
 
-Provides a default scheduler that checks Tool.parallel_safe to decide
-whether a batch of tool calls can run concurrently.  When all tools in
-a batch have parallel_safe=True and the batch contains more than one
-tool, uses ThreadPoolExecutor.  Otherwise falls back to sequential
-execution that is byte-for-byte identical to BaseLLM._dispatch_tool_batch.
+LLM-driven parallelism: when the LLM emits N tool calls in a single
+response, byllm treats that as a signal of independence and runs them
+concurrently by default.  Tools that MUST run sequentially opt out
+with `serialize=True` on the Tool object.
 
-This module is framework-agnostic: it has NO dependency on jac-coder's
-event system, thread-local state, or UI callbacks.
-
-Usage (any byllm application):
-    import from byllm.parallel { default_parallel_scheduler }
-    llm.tool_scheduler = default_parallel_scheduler;
+Design:
+  - Shared module-level ThreadPoolExecutor (env-configurable via BYLLM_TOOL_WORKERS)
+  - `dispatch_batch(tool_calls)` is a generator that yields (tc, msg, ms)
+    as each worker completes, enabling real-time streaming of results
+  - Decision tree:
+      1. batch size == 1  -> inline (no pool overhead)
+      2. any tool has serialize=True -> all run sequentially
+      3. else -> parallel via shared pool
+  - Async tool support: coroutine functions are run via asyncio.run()
+  - Per-tool timeout support via Tool.timeout_sec
+  - atexit cleanup of the shared pool
 """
 
-import time;
+import asyncio;
+import atexit;
+import inspect;
 import logging;
+import os;
+import time;
 
 import from concurrent.futures { ThreadPoolExecutor, as_completed }
 import from byllm.types { ToolCallResultMsg }
 
-glob _MAX_WORKERS: int = 4,
-     _plog = logging.getLogger("byllm.parallel");
+glob _plog = logging.getLogger("byllm.parallel");
+
+# ---------------------------------------------------------------------------
+# Shared worker pool (module-level, reused across all dispatch_batch calls)
+# ---------------------------------------------------------------------------
+glob _POOL_SIZE: int = int(os.environ.get("BYLLM_TOOL_WORKERS", str(min(32, (os.cpu_count() or 4) * 5))));
+glob _WORKER_POOL: ThreadPoolExecutor = ThreadPoolExecutor(
+    max_workers=_POOL_SIZE, thread_name_prefix="byllm-tool"
+);
+
+with entry {
+    atexit.register(_WORKER_POOL.shutdown);
+}
+
+# ---------------------------------------------------------------------------
+# System prompt nudge for LLM
+# ---------------------------------------------------------------------------
+glob _PARALLEL_TOOL_HINT: str = (
+    "\n\nWhen you need multiple independent pieces of information, "
+    "call all the relevant tools in a single response so they run in parallel. "
+    "Call tools sequentially (one per turn) only when a later call depends on "
+    "the result of an earlier one."
+);
 
 
-"""Mark one or more tool functions as parallel-safe.
+# ---------------------------------------------------------------------------
+# User-facing helpers
+# ---------------------------------------------------------------------------
 
-Sets the _parallel_safe attribute on each function so that Tool.postinit
-picks it up automatically when wrapping the function.  Call this before
-the first by-llm invocation that uses the tool.
+"""Mark a tool function as serialize (must run sequentially, not in parallel).
+
+Sets the _serialize attribute on the function so that Tool.postinit
+picks it up automatically when wrapping the function.
 
 Usage (Jac):
     with entry {
-        mark_parallel_safe(get_temperature);
-        mark_parallel_safe(get_humidity);
+        mark_serialize(write_file);
+        mark_serialize(run_command);
     }
 """
-def mark_parallel_safe(func: Any) -> Any {
-    setattr(func, '_parallel_safe', True);
+def mark_serialize(func: Any) -> Any {
+    setattr(func, '_serialize', True);
     return func;
 }
 
 
-"""Sequential fallback — identical to BaseLLM._dispatch_tool_batch default.
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
-Executes tool calls one-by-one in input order.  Used when the batch is
-ineligible for parallel execution (single-tool, mixed parallel_safe,
-or any dispatch-level error).
-
-Returns list of (ToolCall, ToolCallResultMsg, duration_ms) in input order.
-"""
-def sequential_dispatch(tool_calls: list) -> list {
-    results: list = [];
-    for tc in tool_calls {
-        t0 = time.time();
-        msg = tc();
-        ms = int((time.time() - t0) * 1000);
-        results.append((tc, msg, ms));
-    }
-    return results;
+"""Check if a callable is an async coroutine function."""
+def _is_async(func: Any) -> bool {
+    return bool(inspect.iscoroutinefunction(func));
 }
 
 
-"""Execute a single tool call in a worker thread.
+"""Find the index of `item` in `seq` by object identity (id()), not __eq__."""
+def _index_by_identity(seq: list, item: Any) -> int {
+    target_id = id(item);
+    for (i, elem) in enumerate(seq) {
+        if id(elem) == target_id {
+            return i;
+        }
+    }
+    return -1;
+}
 
-On exception, wraps the error in a ToolCallResultMsg so the caller
-always receives a valid result tuple (never raises).
+
+"""Call a synchronous tool, optionally wrapping in a thread with timeout."""
+def _call_sync(tc: Any, timeout: Any) -> Any {
+    if timeout is not None {
+        f = _WORKER_POOL.submit(tc);
+        try {
+            return f.result(timeout=timeout);
+        } except Exception as e {
+            f.cancel();
+            raise TimeoutError(
+                f"Tool '{tc.tool.get_name()}' timed out after {timeout}s"
+            ) from e;
+        }
+    }
+    return tc();
+}
+
+
+"""Call an async tool via asyncio.run() with optional timeout."""
+def _call_async(tc: Any, timeout: Any) -> Any {
+    async def _run() -> Any {
+        coro = tc.tool.func(**tc.args);
+        if timeout is not None {
+            return await asyncio.wait_for(coro, timeout=timeout);
+        }
+        return await coro;
+    }
+    result_val = asyncio.run(_run());
+    return ToolCallResultMsg(
+        content=str(result_val),
+        tool_call_id=tc.call_id,
+        name=tc.tool.get_name()
+    );
+}
+
+
+"""Execute a single tool call with optional timeout.
+
+Always returns (ToolCall, ToolCallResultMsg, duration_ms) — never raises.
+If the tool is an async function, runs it via asyncio.run().
 """
-def _run_worker(tc: Any) -> tuple {
+def _run_one(tc: Any) -> tuple {
     t0 = time.time();
+    timeout = tc.tool.timeout_sec;
     try {
-        msg = tc();
+        if _is_async(tc.tool.func) {
+            msg = _call_async(tc, timeout);
+        } else {
+            msg = _call_sync(tc, timeout);
+        }
     } except Exception as e {
         msg = ToolCallResultMsg(
-            content=f"Error (parallel worker): {str(e)}",
+            content=f"Tool error: {e}",
             tool_call_id=tc.call_id,
             name=tc.tool.get_name()
         );
@@ -83,7 +157,7 @@ def _run_worker(tc: Any) -> tuple {
 }
 
 
-"""Return a flat list of tool-name strings from a batch — used only for logging."""
+"""Return a flat list of tool-name strings from a batch — for logging."""
 def _tool_names(tool_calls: list) -> list {
     names: list = [];
     for tc in tool_calls {
@@ -97,118 +171,95 @@ def _tool_names(tool_calls: list) -> list {
 }
 
 
-"""Execute tool calls in parallel via ThreadPoolExecutor.
-
-Returns list of (ToolCall, ToolCallResultMsg, duration_ms) in INPUT ORDER
-regardless of which worker finishes first.
-
-On catastrophic pool failure, falls back to sequential_dispatch.
-"""
-def parallel_dispatch(tool_calls: list, max_workers: int = 4) -> list {
-    n = len(tool_calls);
-    workers = min(n, max_workers);
-
-    try {
-        futures: dict = {};
-        raw: dict = {};
-        with ThreadPoolExecutor(max_workers=workers) as pool {
-            for (i, tc) in enumerate(tool_calls) {
-                f = pool.submit(_run_worker, tc);
-                futures[f] = i;
-            }
-            for f in as_completed(futures) {
-                idx = futures[f];
-                try {
-                    raw[idx] = f.result();
-                } except Exception as e {
-                    tc_err = tool_calls[idx];
-                    err_msg = ToolCallResultMsg(
-                        content=f"Parallel dispatch error: {str(e)}",
-                        tool_call_id=tc_err.call_id,
-                        name=tc_err.tool.get_name()
-                    );
-                    raw[idx] = (tc_err, err_msg, 0);
-                }
-            }
-        }
-    } except Exception {
-        _plog.warning("batch fallback=sequential reason=pool_error size=%d", n);
-        return sequential_dispatch(tool_calls);
-    }
-
-    # Collect in input order.
-    results: list = [];
-    for i in range(n) {
-        results.append(raw[i]);
-    }
-    return results;
-}
-
-
-"""Check whether every tool in the batch has parallel_safe=True."""
-def _all_parallel_safe(tool_calls: list) -> bool {
+"""Check whether any tool in the batch has serialize=True."""
+def _any_serialize(tool_calls: list) -> bool {
     for tc in tool_calls {
-        if not tc.tool.parallel_safe {
-            return False;
+        if tc.tool.serialize {
+            return True;
         }
     }
-    return True;
+    return False;
 }
 
 
-"""Default parallel scheduler for byllm applications.
+# ---------------------------------------------------------------------------
+# Core dispatcher (generator)
+# ---------------------------------------------------------------------------
 
-Install on any BaseLLM instance to enable automatic parallel dispatch
-for tool batches where every tool is marked parallel_safe=True.
+"""Dispatch a batch of tool calls, yielding (tc, result_msg, duration_ms).
 
 Decision tree (first matching rule wins):
-  1. Batch size <= 1          → sequential  (no parallelism benefit)
-  2. Any tool has parallel_safe=False → sequential (safety)
-  3. All tools parallel_safe=True     → parallel via ThreadPoolExecutor
+  1. Batch size == 1         -> inline execution (no pool overhead)
+  2. Any tool has serialize  -> all run sequentially in input order
+  3. Otherwise               -> parallel via shared ThreadPoolExecutor
 
-Returns list of (ToolCall, ToolCallResultMsg, duration_ms) in INPUT ORDER.
+For the parallel path, results are yielded as workers complete
+(out of input order). The caller is responsible for reordering
+if input-order is needed (e.g. for mt_run.add_message).
 """
-def default_parallel_scheduler(tool_calls: list) -> list {
+def dispatch_batch(tool_calls: list) -> Any {
     n = len(tool_calls);
+    if n == 0 {
+        return;
+    }
     names = _tool_names(tool_calls);
 
-    # Guard: no benefit from a pool with one or zero workers.
-    if n <= 1 {
-        _plog.debug("batch dispatch=sequential reason=single_or_empty size=%d", n);
-        return sequential_dispatch(tool_calls);
+    # --- Single tool: inline, no pool overhead ---
+    if n == 1 {
+        _plog.debug("batch dispatch=inline size=1 tool=%s", names[0]);
+        yield _run_one(tool_calls[0]);
+        return;
     }
 
-    # Guard: any non-parallel-safe tool forces the whole batch sequential.
-    if not _all_parallel_safe(tool_calls) {
+    # --- Any serialize=True: run all sequentially ---
+    if _any_serialize(tool_calls) {
         _plog.info(
-            "batch dispatch=sequential reason=mixed_safety size=%d tools=%s", n, names
+            "batch dispatch=sequential reason=serialize size=%d tools=%s", n, names
         );
-        return sequential_dispatch(tool_calls);
+        for tc in tool_calls {
+            yield _run_one(tc);
+        }
+        return;
     }
 
     # --- Parallel path ---
-    workers = min(n, _MAX_WORKERS);
+    workers = min(n, _POOL_SIZE);
     _plog.info(
         "batch dispatch=parallel size=%d workers=%d tools=%s", n, workers, names
     );
     t_batch = time.time();
 
-    results = parallel_dispatch(tool_calls, max_workers=workers);
+    try {
+        futures: dict = {};
+        for tc in tool_calls {
+            f = _WORKER_POOL.submit(_run_one, tc);
+            futures[f] = tc;
+        }
+        for f in as_completed(futures) {
+            try {
+                yield f.result();
+            } except Exception as e {
+                tc_err = futures[f];
+                err_msg = ToolCallResultMsg(
+                    content=f"Parallel dispatch error: {e}",
+                    tool_call_id=tc_err.call_id,
+                    name=tc_err.tool.get_name()
+                );
+                yield (tc_err, err_msg, 0);
+            }
+        }
+    } except Exception as e {
+        _plog.warning(
+            "batch fallback=sequential reason=pool_error size=%d error=%s", n, e
+        );
+        for tc in tool_calls {
+            yield _run_one(tc);
+        }
+        return;
+    }
 
     wall_ms = int((time.time() - t_batch) * 1000);
-    sum_ms = 0;
-    for (_, _, ms) in results {
-        sum_ms += ms;
-    }
-    speedup = round(sum_ms / wall_ms, 2) if wall_ms > 0 else 0.0;
     _plog.info(
-        "batch done=parallel size=%d workers=%d wall_ms=%d sum_tool_ms=%d speedup=%sx",
-        n,
-        workers,
-        wall_ms,
-        sum_ms,
-        speedup
+        "batch done=parallel size=%d workers=%d wall_ms=%d", n, workers, wall_ms
     );
-
-    return results;
 }
