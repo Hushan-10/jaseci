@@ -36,7 +36,6 @@ impl ToolCall.get_output -> object {
 """Convert the mock tool call to a real ToolCall for testing."""
 impl MockToolCall.to_tool_call -> ToolCall {
     tool_obj = Tool(self.tool);
-    tool_obj.parallel_safe = self.parallel_safe;
     args_parsed = tool_obj.parse_arguments(self.args);
     return ToolCall(
         call_id="",  # Call ID is not used in mock calls.
