@@ -14,10 +14,7 @@ import from byllm.exceptions {
     ConfigurationError
 }
 import from byllm.telemetry { register_agent_callback }
-import from byllm.parallel {
-    dispatch_batch,
-    mark_serialize
-}
+import from byllm.parallel { dispatch_batch, mark_serialize }
 
 glob by = JacRuntime.by ,
      __all__ = [

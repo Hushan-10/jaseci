@@ -227,7 +227,10 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
     # System prompt nudge: when tools are present, encourage the LLM
     # to batch independent tool calls in a single response.
     # Callers can opt out per-call with parallel_hint=False in call_params.
-    if tools and mt_run.call_params.get("parallel_hint", True) and messages and len(messages) > 0 {
+    if tools
+    and mt_run.call_params.get("parallel_hint", True)
+    and messages
+    and len(messages) > 0 {
         first_msg = messages[0];
         if isinstance(first_msg, dict) and first_msg.get("role") == "system" {
             import from byllm.parallel { _PARALLEL_TOOL_HINT }

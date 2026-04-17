@@ -28,15 +28,16 @@ import time;
 import from concurrent.futures { ThreadPoolExecutor, as_completed }
 import from byllm.types { ToolCallResultMsg }
 
-glob _plog = logging.getLogger("byllm.parallel");
-
-# ---------------------------------------------------------------------------
-# Shared worker pool (module-level, reused across all dispatch_batch calls)
-# ---------------------------------------------------------------------------
-glob _POOL_SIZE: int = int(os.environ.get("BYLLM_TOOL_WORKERS", str(min(32, (os.cpu_count() or 4) * 5))));
-glob _WORKER_POOL: ThreadPoolExecutor = ThreadPoolExecutor(
-    max_workers=_POOL_SIZE, thread_name_prefix="byllm-tool"
-);
+glob _plog = logging.getLogger("byllm.parallel"),
+     # ---------------------------------------------------------------------------
+     # Shared worker pool (module-level, reused across all dispatch_batch calls)
+     # ---------------------------------------------------------------------------
+     _POOL_SIZE: int = int(
+         os.environ.get("BYLLM_TOOL_WORKERS", str(min(32, (os.cpu_count() or 4) * 5)))
+     ),
+     _WORKER_POOL: ThreadPoolExecutor = ThreadPoolExecutor(
+         max_workers=_POOL_SIZE, thread_name_prefix="byllm-tool"
+     );
 
 with entry {
     atexit.register(_WORKER_POOL.shutdown);
@@ -46,17 +47,16 @@ with entry {
 # System prompt nudge for LLM
 # ---------------------------------------------------------------------------
 glob _PARALLEL_TOOL_HINT: str = (
-    "\n\nWhen you need multiple independent pieces of information, "
-    "call all the relevant tools in a single response so they run in parallel. "
-    "Call tools sequentially (one per turn) only when a later call depends on "
-    "the result of an earlier one."
-);
+         "\n\nWhen you need multiple independent pieces of information, "
+         "call all the relevant tools in a single response so they run in parallel. "
+         "Call tools sequentially (one per turn) only when a later call depends on "
+         "the result of an earlier one."
+     );
 
 
 # ---------------------------------------------------------------------------
 # User-facing helpers
 # ---------------------------------------------------------------------------
-
 """Mark a tool function as serialize (must run sequentially, not in parallel).
 
 Sets the _serialize attribute on the function so that Tool.postinit
@@ -77,7 +77,6 @@ def mark_serialize(func: Any) -> Any {
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
-
 """Check if a callable is an async coroutine function."""
 def _is_async(func: Any) -> bool {
     return bool(inspect.iscoroutinefunction(func));
@@ -115,7 +114,7 @@ def _call_sync(tc: Any, timeout: Any) -> Any {
 
 """Call an async tool via asyncio.run() with optional timeout."""
 def _call_async(tc: Any, timeout: Any) -> Any {
-    async def _run() -> Any {
+    async def _run -> Any {
         coro = tc.tool.func(**tc.args);
         if timeout is not None {
             return await asyncio.wait_for(coro, timeout=timeout);
@@ -124,9 +123,7 @@ def _call_async(tc: Any, timeout: Any) -> Any {
     }
     result_val = asyncio.run(_run());
     return ToolCallResultMsg(
-        content=str(result_val),
-        tool_call_id=tc.call_id,
-        name=tc.tool.get_name()
+        content=str(result_val), tool_call_id=tc.call_id, name=tc.tool.get_name()
     );
 }
 
@@ -147,9 +144,7 @@ def _run_one(tc: Any) -> tuple {
         }
     } except Exception as e {
         msg = ToolCallResultMsg(
-            content=f"Tool error: {e}",
-            tool_call_id=tc.call_id,
-            name=tc.tool.get_name()
+            content=f"Tool error: {e}", tool_call_id=tc.call_id, name=tc.tool.get_name()
         );
     }
     ms = int((time.time() - t0) * 1000);
@@ -185,7 +180,6 @@ def _any_serialize(tool_calls: list) -> bool {
 # ---------------------------------------------------------------------------
 # Core dispatcher (generator)
 # ---------------------------------------------------------------------------
-
 """Dispatch a batch of tool calls, yielding (tc, result_msg, duration_ms).
 
 Decision tree (first matching rule wins):
