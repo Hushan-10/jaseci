@@ -65,7 +65,8 @@ obj Tool {
         description: str = "",
         params_desc: dict[(str, str)] = None,
         info: Info = None,
-        parallel_safe: bool = False;
+        serialize: bool = False,
+        timeout_sec: float | None = None;
 
     def postinit -> None;
     def __call__(*args: list, **kwargs: dict) -> object;
@@ -99,8 +100,7 @@ Used with MockLLM to simulate tool calls in tests without actual LLM invocation.
 """
 obj MockToolCall {
     has tool: Callable,
-        args: dict,
-        parallel_safe: bool = False;
+        args: dict;
 
     def to_tool_call -> ToolCall;
 }
