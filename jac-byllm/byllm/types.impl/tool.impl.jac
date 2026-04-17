@@ -10,6 +10,10 @@ impl Tool.postinit -> None {
     } else {
         self.params_desc = {name: str(type) for (name, type) in annotations.items()};
     }
+    # Pick up parallel_safe from function attribute if set by the user.
+    if hasattr(self.func, '_parallel_safe') {
+        self.parallel_safe = self.func._parallel_safe;
+    }
 }
 
 """Call the tool function with the provided arguments."""
