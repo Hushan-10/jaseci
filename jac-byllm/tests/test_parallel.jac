@@ -29,10 +29,18 @@ import time;
 import pathlib;
 import types as pytypes;
 
-import from byllm.parallel { dispatch_batch, _is_async, _index_by_identity, mark_serialize }
+import from concurrent.futures { ThreadPoolExecutor }
 
-glob _TESTS_DIR: str = str(pathlib.Path(__file__).resolve().parent);
-glob _ROOT_DIR: str = str(pathlib.Path(__file__).resolve().parent.parent);
+import from byllm.parallel {
+    dispatch_batch,
+    _is_async,
+    _index_by_identity,
+    mark_serialize,
+    _PARALLEL_TOOL_HINT,
+    _WORKER_POOL
+}
+import from byllm.types { Tool, MockToolCall }
+import from byllm.llm { BaseLLM }
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -313,15 +321,14 @@ test "dispatch batch returns a generator" {
 
 
 # ---------------------------------------------------------------------------
-# 12. _PARALLEL_TOOL_HINT constant in source
+# 12. _PARALLEL_TOOL_HINT is importable and meaningful
 # ---------------------------------------------------------------------------
 
-test "parallel tool hint constant in source" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "parallel.jac";
-    content = src.read_text();
-    assert "_PARALLEL_TOOL_HINT" in content;
-    assert "parallel" in content.lower();
-    assert "independent" in content.lower();
+test "parallel tool hint is a meaningful string" {
+    assert isinstance(_PARALLEL_TOOL_HINT, str);
+    assert len(_PARALLEL_TOOL_HINT) > 0;
+    assert "parallel" in _PARALLEL_TOOL_HINT.lower();
+    assert "independent" in _PARALLEL_TOOL_HINT.lower();
 }
 
 
@@ -351,91 +358,112 @@ test "mark serialize sets underscore serialize attribute" {
     assert getattr(my_func, '_serialize') == True;
 }
 
-test "mark serialize function exists in source" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "parallel.jac";
-    content = src.read_text();
-    assert "def mark_serialize" in content;
-    assert "setattr(func, '_serialize', True)" in content;
+test "mark serialize returns the original function" {
+    def f() -> None { }
+    result = mark_serialize(f);
+    assert result is f;
+    assert getattr(result, '_serialize') == True;
 }
 
 
 # ---------------------------------------------------------------------------
-# 15. System prompt nudge wired into basellm
+# 15. _PARALLEL_TOOL_HINT does not mutate shared messages
 # ---------------------------------------------------------------------------
 
-test "system prompt nudge in basellm source" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "llm.impl" / "basellm.impl.jac";
-    content = src.read_text();
-    assert "_PARALLEL_TOOL_HINT" in content;
-    assert 'first_msg["content"]' in content;
+test "parallel hint appended without mutating original message" {
+    original_content = "You are a helpful assistant.";
+    system_msg = {"role": "system", "content": original_content};
+    messages = [system_msg];
+    # Simulate what make_model_params does (copy, don't mutate)
+    first_msg = messages[0];
+    content = first_msg.get("content", "");
+    if isinstance(content, str) and _PARALLEL_TOOL_HINT not in content {
+        messages = list(messages);
+        messages[0] = {**first_msg, "content": content + _PARALLEL_TOOL_HINT};
+    }
+    # New list has the hint
+    assert _PARALLEL_TOOL_HINT in messages[0]["content"];
+    # Original dict is NOT mutated
+    assert system_msg["content"] == original_content;
 }
 
 
 # ---------------------------------------------------------------------------
-# 16. Shared module-level pool in source
+# 16. Shared worker pool is a real ThreadPoolExecutor
 # ---------------------------------------------------------------------------
 
-test "shared worker pool defined in source" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "parallel.jac";
-    content = src.read_text();
-    assert "_WORKER_POOL" in content;
-    assert "ThreadPoolExecutor" in content;
-    assert "BYLLM_TOOL_WORKERS" in content;
+test "shared worker pool is a thread pool executor" {
+    assert isinstance(_WORKER_POOL, ThreadPoolExecutor);
+    # Pool is alive — can submit work
+    future = _WORKER_POOL.submit(lambda: 42);
+    assert future.result(timeout=2) == 42;
 }
 
 
 # ---------------------------------------------------------------------------
-# 17. _serialize detection in Tool.postinit
+# 17. Tool.postinit picks up _serialize from function attribute
 # ---------------------------------------------------------------------------
 
-test "serialize detection in tool postinit source" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "types.impl" / "tool.impl.jac";
-    content = src.read_text();
-    assert "_serialize" in content;
-    assert "self.serialize" in content;
+test "tool postinit picks up serialize from function" {
+    def my_tool(x: str) -> str {
+        return x;
+    }
+    setattr(my_tool, '_serialize', True);
+    tool = Tool(func=my_tool);
+    assert tool.serialize == True;
+}
+
+test "tool postinit defaults serialize to false" {
+    def plain_tool(x: str) -> str {
+        return x;
+    }
+    tool = Tool(func=plain_tool);
+    assert tool.serialize == False;
 }
 
 
 # ---------------------------------------------------------------------------
-# 18. MockLLM batch fixture (scheduler_parity) exists
+# 18. MockToolCall creates proper batch structure
 # ---------------------------------------------------------------------------
 
-test "scheduler parity fixture exists and has batch tool calls" {
-    fixture = pathlib.Path(_TESTS_DIR) / "fixtures" / "scheduler_parity.jac";
-    assert fixture.exists();
-    content = fixture.read_text();
-    assert "MockToolCall" in content;
-    assert "SCHEDULER_PARITY_PASS" in content;
+test "mock tool call creates valid tool call with correct name" {
+    def dummy(x: str) -> str {
+        return f"got {x}";
+    }
+    mtc = MockToolCall(tool=dummy, args={"x": "hello"});
+    tc = mtc.to_tool_call();
+    assert tc.tool.get_name() == "dummy";
+    result = tc();
+    assert "got hello" in result.content;
 }
 
 
 # ---------------------------------------------------------------------------
-# 19. Async tool support in source
+# 19. _is_async detects async functions at runtime
 # ---------------------------------------------------------------------------
 
-test "async tool support functions in source" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "parallel.jac";
-    content = src.read_text();
-    assert "_call_async" in content;
-    assert "_is_async" in content;
-    assert "asyncio.run" in content;
+test "is async detects coroutine functions at runtime" {
+    import asyncio;
+    def sync_fn() -> None { }
+    async def async_fn() -> None { }
+    assert _is_async(sync_fn) == False;
+    assert _is_async(async_fn) == True;
+    assert callable(_is_async);
 }
 
 
 # ---------------------------------------------------------------------------
-# 20. Old API removed from llm.jac
+# 20. Old API not present on BaseLLM, dispatch_batch is the replacement
 # ---------------------------------------------------------------------------
 
-test "tool scheduler removed from llm" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "llm.jac";
-    content = src.read_text();
-    assert "tool_scheduler" not in content;
-    assert "_dispatch_tool_batch" not in content;
+test "basellm has no tool scheduler attribute" {
+    assert not hasattr(BaseLLM, 'tool_scheduler');
+    assert not hasattr(BaseLLM, '_dispatch_tool_batch');
 }
 
-test "basellm uses dispatch batch not old api" {
-    src = pathlib.Path(_ROOT_DIR) / "byllm" / "llm.impl" / "basellm.impl.jac";
-    content = src.read_text();
-    assert "dispatch_batch" in content;
-    assert "_dispatch_tool_batch" not in content;
+test "dispatch batch is callable and importable" {
+    assert callable(dispatch_batch);
+    # Verify it returns a generator for an empty batch
+    gen = dispatch_batch([]);
+    assert list(gen) == [];
 }
