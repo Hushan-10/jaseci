@@ -97,18 +97,31 @@ def _index_by_identity(seq: list, item: Any) -> int {
 
 """Call a synchronous tool, optionally wrapping in a thread with timeout."""
 def _call_sync(tc: Any, timeout: Any) -> Any {
-    if timeout is not None {
-        f = _WORKER_POOL.submit(tc);
+    if timeout is None {
+        return tc();
+    }
+    import threading;
+    result_box: list = [None];
+    error_box: list = [None];
+    def _worker -> None {
         try {
-            return f.result(timeout=timeout);
+            result_box[0] = tc();
         } except Exception as e {
-            f.cancel();
-            raise TimeoutError(
-                f"Tool '{tc.tool.get_name()}' timed out after {timeout}s"
-            ) from e;
+            error_box[0] = e;
         }
     }
-    return tc();
+    t = threading.Thread(target=_worker, daemon=True);
+    t.start();
+    t.join(timeout=timeout);
+    if t.is_alive() {
+        raise TimeoutError(
+            f"Tool '{tc.tool.get_name()}' timed out after {timeout}s"
+        );
+    }
+    if error_box[0] is not None {
+        raise error_box[0];
+    }
+    return result_box[0];
 }
 
 
@@ -132,6 +145,8 @@ def _call_async(tc: Any, timeout: Any) -> Any {
 
 Always returns (ToolCall, ToolCallResultMsg, duration_ms) — never raises.
 If the tool is an async function, runs it via asyncio.run().
+TimeoutError / asyncio.TimeoutError are reported with a consistent
+"timed out after Xs" message; all other errors fall to the generic catch.
 """
 def _run_one(tc: Any) -> tuple {
     t0 = time.time();
@@ -142,6 +157,12 @@ def _run_one(tc: Any) -> tuple {
         } else {
             msg = _call_sync(tc, timeout);
         }
+    } except (TimeoutError, asyncio.TimeoutError) as e {
+        msg = ToolCallResultMsg(
+            content=f"Tool '{tc.tool.get_name()}' timed out after {timeout}s",
+            tool_call_id=tc.call_id,
+            name=tc.tool.get_name()
+        );
     } except Exception as e {
         msg = ToolCallResultMsg(
             content=f"Tool error: {e}", tool_call_id=tc.call_id, name=tc.tool.get_name()
@@ -223,33 +244,23 @@ def dispatch_batch(tool_calls: list) -> Any {
     );
     t_batch = time.time();
 
-    try {
-        futures: dict = {};
-        for tc in tool_calls {
-            f = _WORKER_POOL.submit(_run_one, tc);
-            futures[f] = tc;
+    futures: dict = {};
+    for tc in tool_calls {
+        f = _WORKER_POOL.submit(_run_one, tc);
+        futures[f] = tc;
+    }
+    for f in as_completed(futures) {
+        try {
+            yield f.result();
+        } except Exception as e {
+            tc_err = futures[f];
+            err_msg = ToolCallResultMsg(
+                content=f"Parallel dispatch error: {e}",
+                tool_call_id=tc_err.call_id,
+                name=tc_err.tool.get_name()
+            );
+            yield (tc_err, err_msg, 0);
         }
-        for f in as_completed(futures) {
-            try {
-                yield f.result();
-            } except Exception as e {
-                tc_err = futures[f];
-                err_msg = ToolCallResultMsg(
-                    content=f"Parallel dispatch error: {e}",
-                    tool_call_id=tc_err.call_id,
-                    name=tc_err.tool.get_name()
-                );
-                yield (tc_err, err_msg, 0);
-            }
-        }
-    } except Exception as e {
-        _plog.warning(
-            "batch fallback=sequential reason=pool_error size=%d error=%s", n, e
-        );
-        for tc in tool_calls {
-            yield _run_one(tc);
-        }
-        return;
     }
 
     wall_ms = int((time.time() - t_batch) * 1000);

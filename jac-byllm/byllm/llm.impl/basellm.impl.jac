@@ -150,7 +150,6 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
             if non_finish_calls {
                 # Collect results from dispatch_batch generator, then
                 # add messages in input order for deterministic history.
-                import from byllm.parallel { dispatch_batch, _index_by_identity }
                 raw_results: list = list(dispatch_batch(non_finish_calls));
                 # Reorder by input position using identity comparison.
                 ordered: dict = {};
@@ -233,10 +232,10 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
     and len(messages) > 0 {
         first_msg = messages[0];
         if isinstance(first_msg, dict) and first_msg.get("role") == "system" {
-            import from byllm.parallel { _PARALLEL_TOOL_HINT }
             content = first_msg.get("content", "");
             if isinstance(content, str) and _PARALLEL_TOOL_HINT not in content {
-                first_msg["content"] = content + _PARALLEL_TOOL_HINT;
+                messages = list(messages);
+                messages[0] = {**first_msg, "content": content + _PARALLEL_TOOL_HINT};
             }
         }
     }
@@ -714,7 +713,6 @@ impl BaseLLM._invoke_streaming(
 
                     # Execute via dispatch_batch — streams results as workers complete.
                     # Collect all results, then add to mt_run in input order.
-                    import from byllm.parallel { dispatch_batch, _index_by_identity }
                     raw_results: list = [];
 
                     max_result_len = int(
