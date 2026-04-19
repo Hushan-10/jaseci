@@ -1416,10 +1416,78 @@ impl TypeEvaluator._get_type_of_expression_core(
             return operations.get_type_of_binary_operation(self, expr);
 
         case uni.CompareExpr():
-            # Evaluate operands for side effects / error detection
-            self.get_type_of_expression(expr.left);
+            # Evaluate all operand types and validate each comparison pair.
+            # For a chained comparison `a < b < c`, check (a, <, b) and (b, <, c).
+            operand_types: list[types.TypeBase] = [
+                self.get_type_of_expression(expr.left)
+            ];
             for right in expr.rights {
-                self.get_type_of_expression(right);
+                operand_types.append(self.get_type_of_expression(right));
+            }
+            for i in range(len(expr.ops)) {
+                op = expr.ops[i];
+                left_type = operand_types[i];
+                right_type = operand_types[i + 1];
+                # Skip validation for unknown/any types (not enough info to diagnose).
+                if (
+                    isinstance(left_type, types.UnknownType)
+                    or isinstance(right_type, types.UnknownType)
+                    or left_type.is_any_type()
+                    or right_type.is_any_type()
+                ) {
+                    continue;
+                }
+                # `is` / `is not` are identity checks — always valid.
+                if op.name in (Tok.KW_IS, Tok.KW_ISN) {
+                    continue;
+                }
+                # `in` / `not in` — check __contains__ on the RIGHT operand.
+                # Enum classes are iterable/containable via EnumMeta which is
+                # not in the Jac type system's MRO — skip the check for them
+                # (same pattern as exit_in_for_stmt for __iter__).
+                if op.name in (Tok.KW_IN, Tok.KW_NIN) {
+                    is_enum = (
+                        isinstance(right_type, types.ClassType)
+                        and right_type.is_enum_class()
+                    );
+                    if not is_enum {
+                        result = self.get_type_of_magic_method_call(
+                            right_type, "__contains__", [expr.rights[i]], None
+                        );
+                        if result is None {
+                            self.emit_diag(
+                                E1111, expr, op=op.value, type=str(right_type)
+                            );
+                        }
+                    }
+                    continue;
+                }
+                # Ordered / equality comparisons: <, <=, >, >=, ==, !=
+                # Reuse BINARY_OPERATOR_MAP which already maps these tokens
+                # to (forward_magic, reflected_magic) pairs.
+                if op.name in operations.BINARY_OPERATOR_MAP {
+                    (magic, rmagic) = operations.BINARY_OPERATOR_MAP[op.name];
+                    result = self.get_type_of_magic_method_call(
+                        left_type, magic, [expr.rights[i]], None
+                    );
+                    if result is None {
+                        result = self.get_type_of_magic_method_call(
+                            right_type,
+                            rmagic,
+                            [expr.left if i == 0 else expr.rights[i - 1]],
+                            None
+                        );
+                    }
+                    if result is None {
+                        self.emit_diag(
+                            E1110,
+                            expr,
+                            op=op.value,
+                            left=str(left_type),
+                            right=str(right_type)
+                        );
+                    }
+                }
             }
             # Comparisons always return bool
             if self.prefetch and self.prefetch.bool_class {
@@ -1626,6 +1694,31 @@ impl TypeEvaluator._get_type_of_expression_core(
                 return self._get_type_of_super(expr);
             }
 
+            # Handle bare `root` — the deprecated form (not in a FuncCall).
+            # Codegen rewrites bare root to root(), so the type checker must
+            # resolve it as Root instance to avoid false E1096 errors on
+            # connections like `root ++> x`. Only applies when `root` would
+            # resolve from jac_builtins.pyi (not a user-defined local).
+            if isinstance(expr, uni.Name)
+            and expr.value == "root"
+            and not (
+                isinstance(expr.parent, uni.FuncCall) and expr.parent.target is expr
+            )
+            and self.prefetch
+            and self.prefetch.root_class {
+                scope_ = expr.find_parent_of_type(uni.UniScopeNode);
+                local_sym = type_utils.lookup_symtab(scope_, "root", None)
+                    if scope_
+                    else None;
+                if local_sym is None
+                or (
+                    local_sym.decl is not None
+                    and local_sym.decl.loc.mod_path.endswith("jac_builtins.pyi")
+                ) {
+                    return self._convert_to_instance(self.prefetch.root_class);
+                }
+            }
+
             if scope := expr.find_parent_of_type(uni.UniScopeNode) {
                 if symbol := type_utils.lookup_symtab(
                     scope, expr.value, self.builtins_module
@@ -1802,6 +1895,15 @@ impl TypeEvaluator._get_type_of_symbol(symbol: uni.Symbol) -> TypeBase {
             # Note: Scope narrowing is checked in get_type_of_expression before caching.
             if node_.type is not None {
                 return node_.type;
+            }
+            # ---- Handle enum member declarations ----
+            # A Name declared inside an enum body (either as the target of an
+            # Assignment — `RED = 1` — or as a bare name — `RED,`) represents
+            # a specific enum member, not the enum class. Return EnumMemberType
+            # so hover, assignment checks, and attribute access all see the
+            # correct per-member type.
+            if enum_member_type := self._get_enum_member_type_for_decl(node_) {
+                return enum_member_type;
             }
             # ---- Handle tuple/list unpacking targets ----
             # When a Name is inside a TupleVal/ListVal that is the target
@@ -2067,6 +2169,52 @@ impl TypeEvaluator._get_type_of_symbol(symbol: uni.Symbol) -> TypeBase {
     # TODO: Implement for functions, parameters, explicit type
     # annotations in assignment etc.
     return types.UnknownType();
+}
+
+"""Return EnumMemberType if node_ is an enum member declaration Name.
+
+Uses the parser-set `Assignment.is_enum_stmt` flag as the structural
+discriminator — it is set for both inline (`enum Color { RED = 1 }`) and
+impl-based (`enum Color; impl Color { RED = 1 }`) forms, so enum members
+are identified uniformly without AST shape probing. To resolve the owning
+Enum, the Assignment's parent is either the Enum itself (inline) or the
+ImplDef that implements it; DeclImplMatchPass sets ImplDef.decl_link to
+the declaring Enum before TypeCheckPass runs. The member's EnumMemberInfo
+is built eagerly by get_type_of_enum and wrapped in EnumMemberType here.
+Returns None when node_ is not an enum member declaration Name.
+"""
+impl TypeEvaluator._get_enum_member_type_for_decl(
+    node_: uni.Name
+) -> (types.EnumMemberType | None) {
+    assignment = node_.parent;
+    if not isinstance(assignment, uni.Assignment) or not assignment.is_enum_stmt {
+        return None;
+    }
+    # Guard against non-target positions (the Assignment holds only the
+    # member Name(s) in `target`, so this is typically redundant — but
+    # guards against future AST shapes that reuse is_enum_stmt).
+    if node_ not in assignment.target {
+        return None;
+    }
+    container = assignment.parent;
+    enum_node: uni.Enum | None = None;
+    if isinstance(container, uni.Enum) {
+        enum_node = container;
+    } elif isinstance(container, uni.ImplDef)
+    and isinstance(container.decl_link, uni.Enum) {
+        enum_node = container.decl_link;
+    }
+    if enum_node is None {
+        return None;
+    }
+    enum_type = self.get_type_of_enum(enum_node);
+    member_info = enum_type.shared.enum_members.get(node_.sym_name)
+        if enum_type.shared.enum_members
+        else None;
+    if member_info is None {
+        return None;
+    }
+    return types.EnumMemberType(enum_class=enum_type, member_info=member_info);
 }
 
 """
@@ -2821,7 +2969,14 @@ impl TypeEvaluator.get_type_of_expression(
     }
     result = self._get_type_of_expression_core(node_, expected_type);
     if isinstance(result, types.UnknownType) {
-        self.emit_diag(W1051, node_);
+        # Suppress W1051 inside stub modules (typeshed .pyi files). Stubs
+        # may contain forward references and cross-stub types that can't
+        # be fully resolved in Jac; surfacing them produces noise for
+        # users who only care about diagnostics on their own source.
+        mod = node_.find_parent_of_type(uni.Module);
+        if mod is None or not mod.is_raised_from_py {
+            self.emit_diag(W1051, node_);
+        }
     }
     node_.type = result;
     return result;
