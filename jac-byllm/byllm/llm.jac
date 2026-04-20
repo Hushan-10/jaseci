@@ -44,6 +44,7 @@ glob _byllm_config = get_byllm_config(),
      _litellm_config = _byllm_config.get_litellm_config(),
      _model_config = _byllm_config.get_model_config(),
      _call_params_config = _byllm_config.get_call_params_config(),
+     _parallel_config = _byllm_config.get_parallel_config(),
      _CACHE_CONTROL_EPHEMERAL: dict = {"type": "ephemeral"};
 
 # Configure LiteLLM based on jac.toml settings
