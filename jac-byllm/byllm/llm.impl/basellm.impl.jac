@@ -254,7 +254,7 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
             content = first_msg.get("content", "");
             if isinstance(content, str) and _PARALLEL_TOOL_HINT not in content {
                 messages = list(messages);
-                messages[0] = {**first_msg, "content": content + _PARALLEL_TOOL_HINT};
+                messages[0] = {** first_msg, "content": content + _PARALLEL_TOOL_HINT};
             }
         }
     }
@@ -741,7 +741,9 @@ impl BaseLLM._invoke_streaming(
                             or 500
                         );
 
-                        for (tc, result_msg, tool_ms) in dispatch_batch(non_finish_calls) {
+                        for (tc, result_msg, tool_ms) in dispatch_batch(
+                            non_finish_calls
+                        ) {
                             truncated_result = result_msg.content[:max_result_len];
                             last_tool = tc.tool.get_name();
                             last_result = truncated_result;
