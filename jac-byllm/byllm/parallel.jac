@@ -103,7 +103,7 @@ def _call_sync(tc: Any, timeout: Any) -> Any {
     import threading;
     result_box: list = [None];
     error_box: list = [None];
-    def _worker -> None {
+    def _worker {
         try {
             result_box[0] = tc();
         } except Exception as e {
@@ -114,9 +114,7 @@ def _call_sync(tc: Any, timeout: Any) -> Any {
     t.start();
     t.join(timeout=timeout);
     if t.is_alive() {
-        raise TimeoutError(
-            f"Tool '{tc.tool.get_name()}' timed out after {timeout}s"
-        );
+        raise TimeoutError(f"Tool '{tc.tool.get_name()}' timed out after {timeout}s");
     }
     if error_box[0] is not None {
         raise error_box[0];
