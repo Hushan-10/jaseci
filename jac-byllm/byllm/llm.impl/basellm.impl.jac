@@ -1,3 +1,23 @@
+"""Determine if a given by-llm call should use parallel tool execution.
+
+Three-level priority:
+  1. Per-call:  parallelize=True/False in call_params  (highest priority)
+  2. Global:    [plugins.byllm.parallel] enabled or BYLLM_PARALLEL_TOOL_CALLING env
+  3. Default:   sequential (if nothing is set)
+"""
+def _should_parallelize(mt_run: MTRuntime) -> bool {
+    per_call = mt_run.call_params.get("parallelize");
+    if per_call is True {
+        return True;
+    }
+    if per_call is False {
+        return False;
+    }
+    # Not specified → follow global config (read fresh so runtime changes are picked up)
+    return get_byllm_config().get_parallel_config().get("enabled", False);
+}
+
+
 """Check if the model is eligible for Anthropic prompt caching."""
 def _is_prompt_caching_eligible(model_name: str) -> bool {
     pc_config = _byllm_config.get_prompt_caching_config();
@@ -134,7 +154,7 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
                 else getattr(usage, "total_tokens", 0)
         );
         if resp.tool_calls {
-            if _parallel_config.get("enabled", False) {
+            if _should_parallelize(mt_run) {
                 # --- Parallel path (supervisor design) ---
                 # Route through dispatch_batch for concurrent execution.
                 non_finish_calls = [
@@ -241,20 +261,75 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
     messages = mt_run.get_msg_list();
     tools = mt_run.get_tool_list() or None;
 
-    # System prompt nudge: only when parallel tool calling is enabled,
-    # encourage the LLM to batch independent tool calls in a single response.
-    # Callers can opt out per-call with parallel_hint=False in call_params.
-    if _parallel_config.get("enabled", False)
+    # Intelligent parallel scheduling: when parallel is active for this call,
+    # annotate tool descriptions and inject scheduling rules into the system prompt
+    # so the LLM can intelligently decide which tools to batch vs sequence.
+    if _should_parallelize(mt_run)
     and tools
     and mt_run.call_params.get("parallel_hint", True)
     and messages
     and len(messages) > 0 {
+
+        # --- Annotate each tool's description with scheduling metadata ---
+        # The description field is the primary channel LLMs read when deciding
+        # tool calls.  Placing the constraint here is more reliable than a
+        # system-prompt list the LLM must cross-reference.
+        annotated: list = [];
+        serial_names: list = [];
+        for (i, schema) in enumerate(tools) {
+            tool_obj = mt_run.tools[i] if i < len(mt_run.tools) else None;
+            is_serial = tool_obj.serialize if tool_obj else False;
+            is_finish = tool_obj.is_finish_tool() if tool_obj else False;
+            if is_finish {
+                annotated.append(schema);
+            } else {
+                fn = schema.get("function", {});
+                desc = fn.get("description", "");
+                if is_serial {
+                    serial_names.append(fn.get("name", "unknown"));
+                    tag = " [SEQUENTIAL: has side-effects — must be called alone, never batch with other tools]";
+                } else {
+                    tag = " [PARALLEL-SAFE: can be batched with other independent tools in one response]";
+                }
+                annotated.append({
+                    **schema,
+                    "function": {**fn, "description": desc + tag}
+                });
+            }
+        }
+        tools = annotated;
+
+        # --- Inject intelligent scheduling hint into system prompt ---
         first_msg = messages[0];
         if isinstance(first_msg, dict) and first_msg.get("role") == "system" {
             content = first_msg.get("content", "");
             if isinstance(content, str) and _PARALLEL_TOOL_HINT not in content {
+                hint = _PARALLEL_TOOL_HINT;
+
+                # Semantic rules for implicit dependency detection
+                hint += (
+                    "\n\n**Intelligent tool scheduling rules:**"
+                    "\nBATCH in one response (parallel) when:"
+                    "\n - You already know ALL required arguments for every tool"
+                    "\n - No tool in the group needs another tool's output as input"
+                    "\n - No two tools in the group modify the same resource"
+                    "\nSEPARATE into different responses (sequential) when:"
+                    "\n - A tool's argument depends on another tool's return value"
+                    "\n - Two tools write to the same file or shared state"
+                    "\n - A tool is labeled [SEQUENTIAL] in its description"
+                    "\n\nKEY TEST: For each tool ask — 'Can I fill in ALL of this tool's arguments RIGHT NOW"
+                    " without waiting for any other tool's result?' YES for all → batch. NO for any → separate it."
+                );
+
+                # Explicit serialize list (if any)
+                if serial_names {
+                    hint += (
+                        f"\n\nTools that must ALWAYS run alone (never batch): {serial_names}"
+                    );
+                }
+
                 messages = list(messages);
-                messages[0] = {** first_msg, "content": content + _PARALLEL_TOOL_HINT};
+                messages[0] = {**first_msg, "content": content + hint};
             }
         }
     }
@@ -701,7 +776,7 @@ impl BaseLLM._invoke_streaming(
             }
 
             if resp.tool_calls {
-                if _parallel_config.get("enabled", False) {
+                if _should_parallelize(mt_run) {
                     # --- Parallel streaming path (supervisor design) ---
                     # Announce all tool calls upfront, dispatch concurrently,
                     # emit results as workers complete, then add messages in input order.
