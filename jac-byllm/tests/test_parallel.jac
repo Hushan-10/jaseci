@@ -532,13 +532,13 @@ test "per-call parallelize=True overrides global OFF" {
     def sl_a -> str { time.sleep(0.05); return "a"; }
     def sl_b -> str { time.sleep(0.05); return "b"; }
     def sl_c -> str { time.sleep(0.05); return "c"; }
-    def sl_finish(final_output: str) -> str { return final_output; }
+    def finish_tool(final_output: str) -> str { return final_output; }
 
     llm = Model(
         model_name="mockllm",
         config={"outputs": [
             [MockToolCall(tool=sl_a, args={}), MockToolCall(tool=sl_b, args={}), MockToolCall(tool=sl_c, args={})],
-            MockToolCall(tool=sl_finish, args={"final_output": "done"}),
+            MockToolCall(tool=finish_tool, args={"final_output": "done"}),
             "done"
         ]}
     );
@@ -559,13 +559,13 @@ test "per-call parallelize=False overrides global ON" {
     def sq_a -> str { time.sleep(0.05); return "a"; }
     def sq_b -> str { time.sleep(0.05); return "b"; }
     def sq_c -> str { time.sleep(0.05); return "c"; }
-    def sq_finish(final_output: str) -> str { return final_output; }
+    def finish_tool(final_output: str) -> str { return final_output; }
 
     llm = Model(
         model_name="mockllm",
         config={"outputs": [
             [MockToolCall(tool=sq_a, args={}), MockToolCall(tool=sq_b, args={}), MockToolCall(tool=sq_c, args={})],
-            MockToolCall(tool=sq_finish, args={"final_output": "done"}),
+            MockToolCall(tool=finish_tool, args={"final_output": "done"}),
             "done"
         ]}
     );
