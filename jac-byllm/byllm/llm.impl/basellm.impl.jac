@@ -166,8 +166,9 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
             # Parallel: full batch (concurrent). Sequential: one-at-a-time (inline, no pool overhead).
             if non_finish_calls {
                 batches = (
-                    [non_finish_calls] if _should_parallelize(mt_run)
-                    else [[tc] for tc in non_finish_calls]
+                    [non_finish_calls]
+                        if _should_parallelize(mt_run)
+                        else [[tc] for tc in non_finish_calls]
                 );
                 for batch in batches {
                     raw_results: list = list(dispatch_batch(batch));
@@ -250,7 +251,6 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
     and mt_run.call_params.get("parallel_hint", True)
     and messages
     and len(messages) > 0 {
-
         # --- Annotate each tool's description with scheduling metadata ---
         # The description field is the primary channel LLMs read when deciding
         # tool calls.  Placing the constraint here is more reliable than a
@@ -272,10 +272,9 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
                 } else {
                     tag = " [PARALLEL-SAFE: can be batched with other independent tools in one response]";
                 }
-                annotated.append({
-                    **schema,
-                    "function": {**fn, "description": desc + tag}
-                });
+                annotated.append(
+                    {** schema, "function": {** fn, "description": desc + tag}}
+                );
             }
         }
         tools = annotated;
@@ -310,7 +309,7 @@ impl BaseLLM.make_model_params(mt_run: MTRuntime) -> dict {
                 }
 
                 messages = list(messages);
-                messages[0] = {**first_msg, "content": content + hint};
+                messages[0] = {** first_msg, "content": content + hint};
             }
         }
     }
@@ -778,8 +777,9 @@ impl BaseLLM._invoke_streaming(
 
                     # Parallel: full batch. Sequential: one-at-a-time via dispatch_batch.
                     batches = (
-                        [non_finish_calls] if _should_parallelize(mt_run)
-                        else [[tc] for tc in non_finish_calls]
+                        [non_finish_calls]
+                            if _should_parallelize(mt_run)
+                            else [[tc] for tc in non_finish_calls]
                     );
 
                     for batch in batches {
