@@ -1,10 +1,5 @@
-"""Determine if a given by-llm call should use parallel tool execution.
+"""Determine if a given by-llm call should use parallel tool execution."""
 
-Three-level priority:
-  1. Per-call:  parallelize=True/False in call_params  (highest priority)
-  2. Global:    [plugins.byllm.parallel] enabled or BYLLM_PARALLEL_TOOL_CALLING env
-  3. Default:   sequential (if nothing is set)
-"""
 def _should_parallelize(mt_run: MTRuntime) -> bool {
     per_call = mt_run.call_params.get("parallelize");
     if per_call is True {
