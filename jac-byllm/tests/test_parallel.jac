@@ -22,6 +22,9 @@ Covers:
   19. Async tool support (_call_async, _is_async, asyncio.run) in source
   20. Old API (tool_scheduler, _dispatch_tool_batch) removed from llm.jac
   21. BaseLLM.invoke uses dispatch_batch
+  22. _should_parallelize: default OFF, env var, per-call overrides
+  23. make_model_params: tool description annotations + finish_tool untagged
+  24. make_model_params: scheduling hint injection gating
 """
 
 import threading;
@@ -30,6 +33,8 @@ import pathlib;
 import types as pytypes;
 
 import from concurrent.futures { ThreadPoolExecutor }
+
+import os;
 
 import from byllm.parallel {
     dispatch_batch,
@@ -41,6 +46,8 @@ import from byllm.parallel {
 }
 import from byllm.types { Tool, MockToolCall }
 import from byllm.llm { BaseLLM }
+import from byllm.lib { Model }
+import from byllm.config_loader { reset_byllm_config, get_byllm_config }
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -466,4 +473,304 @@ test "dispatch batch is callable and importable" {
     # Verify it returns a generator for an empty batch
     gen = dispatch_batch([]);
     assert list(gen) == [];
+}
+
+
+# ---------------------------------------------------------------------------
+# Mock MTRuntime for make_model_params tests
+# ---------------------------------------------------------------------------
+
+obj _MockMTRun {
+    has call_params: dict = {},
+        tools: list = [],
+        stream: bool = False,
+        mtir: Any = None,
+        messages: list = [];
+
+    def get_msg_list -> list {
+        return list(self.messages);
+    }
+
+    def get_tool_list -> list {
+        if not self.tools {
+            return [];
+        }
+        return [t.get_json_schema() for t in self.tools];
+    }
+
+    def get_output_schema -> Any {
+        return None;
+    }
+}
+
+
+# ---------------------------------------------------------------------------
+# 22. _should_parallelize gate logic
+# ---------------------------------------------------------------------------
+
+test "parallel OFF by default without config or env" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+    cfg = get_byllm_config().get_parallel_config();
+    assert cfg.get("enabled", False) == False, "Parallel should be OFF by default";
+}
+
+test "BYLLM_PARALLEL_TOOL_CALLING env var enables parallel" {
+    os.environ["BYLLM_PARALLEL_TOOL_CALLING"] = "true";
+    reset_byllm_config();
+    cfg = get_byllm_config().get_parallel_config();
+    assert cfg.get("enabled", False) == True, "Env var should enable parallel";
+    # Cleanup
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+}
+
+test "per-call parallelize=True overrides global OFF" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def sl_a -> str { time.sleep(0.05); return "a"; }
+    def sl_b -> str { time.sleep(0.05); return "b"; }
+    def sl_c -> str { time.sleep(0.05); return "c"; }
+    def sl_finish(final_output: str) -> str { return final_output; }
+
+    llm = Model(
+        model_name="mockllm",
+        config={"outputs": [
+            [MockToolCall(tool=sl_a, args={}), MockToolCall(tool=sl_b, args={}), MockToolCall(tool=sl_c, args={})],
+            MockToolCall(tool=sl_finish, args={"final_output": "done"}),
+            "done"
+        ]}
+    );
+    def task_par(q: str) -> str by llm(tools=[sl_a, sl_b, sl_c], parallelize=True);
+
+    t0 = time.time();
+    result = task_par("test");
+    elapsed = int((time.time() - t0) * 1000);
+
+    assert result == "done";
+    assert elapsed < 100, f"Expected parallel (<100ms) but got {elapsed}ms";
+}
+
+test "per-call parallelize=False overrides global ON" {
+    os.environ["BYLLM_PARALLEL_TOOL_CALLING"] = "true";
+    reset_byllm_config();
+
+    def sq_a -> str { time.sleep(0.05); return "a"; }
+    def sq_b -> str { time.sleep(0.05); return "b"; }
+    def sq_c -> str { time.sleep(0.05); return "c"; }
+    def sq_finish(final_output: str) -> str { return final_output; }
+
+    llm = Model(
+        model_name="mockllm",
+        config={"outputs": [
+            [MockToolCall(tool=sq_a, args={}), MockToolCall(tool=sq_b, args={}), MockToolCall(tool=sq_c, args={})],
+            MockToolCall(tool=sq_finish, args={"final_output": "done"}),
+            "done"
+        ]}
+    );
+    def task_seq(q: str) -> str by llm(tools=[sq_a, sq_b, sq_c], parallelize=False);
+
+    t0 = time.time();
+    result = task_seq("test");
+    elapsed = int((time.time() - t0) * 1000);
+
+    assert result == "done";
+    assert elapsed >= 100, f"Expected sequential (>=100ms) but got {elapsed}ms";
+
+    # Cleanup
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+}
+
+
+# ---------------------------------------------------------------------------
+# 23. make_model_params: tool description annotations
+# ---------------------------------------------------------------------------
+
+test "parallel-safe and sequential tags added to tool descriptions" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def anno_a(x: str) -> str { return x; }
+    def anno_b(x: str) -> str { return x; }
+
+    tool_a = Tool(func=anno_a, description="Tool A does things");
+    tool_b = Tool(func=anno_b, description="Tool B writes files", serialize=True);
+    ft = Tool.make_finish_tool(str);
+
+    model = Model(model_name="mockllm");
+    mt_run = _MockMTRun(
+        call_params={"parallelize": True},
+        tools=[tool_a, tool_b, ft],
+        messages=[{"role": "system", "content": "You are helpful."}]
+    );
+
+    params = model.make_model_params(mt_run);
+    tool_schemas = params.get("tools", []);
+
+    # tool_a (parallel-safe) should have [PARALLEL-SAFE tag
+    a_desc = tool_schemas[0]["function"]["description"];
+    assert "[PARALLEL-SAFE" in a_desc, f"Expected [PARALLEL-SAFE in: {a_desc}";
+
+    # tool_b (serialize=True) should have [SEQUENTIAL tag
+    b_desc = tool_schemas[1]["function"]["description"];
+    assert "[SEQUENTIAL" in b_desc, f"Expected [SEQUENTIAL in: {b_desc}";
+
+    # Cleanup
+    reset_byllm_config();
+}
+
+test "finish tool description is NOT tagged" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def ft_a(x: str) -> str { return x; }
+    tool_a = Tool(func=ft_a, description="Tool A");
+    ft = Tool.make_finish_tool(str);
+    ft_original_desc = ft.description;
+
+    model = Model(model_name="mockllm");
+    mt_run = _MockMTRun(
+        call_params={"parallelize": True},
+        tools=[tool_a, ft],
+        messages=[{"role": "system", "content": "You are helpful."}]
+    );
+
+    params = model.make_model_params(mt_run);
+    tool_schemas = params.get("tools", []);
+
+    # Find finish_tool schema (last one)
+    ft_schema = tool_schemas[-1];
+    ft_desc = ft_schema["function"]["description"];
+    assert "[PARALLEL" not in ft_desc, f"finish_tool should NOT be tagged: {ft_desc}";
+    assert "[SEQUENTIAL" not in ft_desc, f"finish_tool should NOT be tagged: {ft_desc}";
+
+    # Cleanup
+    reset_byllm_config();
+}
+
+
+# ---------------------------------------------------------------------------
+# 24. make_model_params: scheduling hint injection gating
+# ---------------------------------------------------------------------------
+
+test "scheduling hint injected when parallel plus tools plus parallel_hint" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def hint_a(x: str) -> str { return x; }
+    tool_a = Tool(func=hint_a, description="Tool A");
+    ft = Tool.make_finish_tool(str);
+
+    model = Model(model_name="mockllm");
+    mt_run = _MockMTRun(
+        call_params={"parallelize": True},
+        tools=[tool_a, ft],
+        messages=[{"role": "system", "content": "You are helpful."}]
+    );
+
+    params = model.make_model_params(mt_run);
+    sys_content = params["messages"][0]["content"];
+    assert "Intelligent tool scheduling rules" in sys_content, (
+        "Scheduling hint should be injected when parallel is active"
+    );
+    assert "BATCH in one response" in sys_content;
+    assert "SEPARATE into different responses" in sys_content;
+
+    # Cleanup
+    reset_byllm_config();
+}
+
+test "no annotations or hint when parallel is OFF" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def nop_a(x: str) -> str { return x; }
+    tool_a = Tool(func=nop_a, description="Tool A original");
+    ft = Tool.make_finish_tool(str);
+
+    model = Model(model_name="mockllm");
+    mt_run = _MockMTRun(
+        call_params={},
+        tools=[tool_a, ft],
+        messages=[{"role": "system", "content": "You are helpful."}]
+    );
+
+    params = model.make_model_params(mt_run);
+
+    # Tool descriptions should be unchanged
+    a_desc = params["tools"][0]["function"]["description"];
+    assert "[PARALLEL" not in a_desc, f"No tags when parallel OFF: {a_desc}";
+    assert "[SEQUENTIAL" not in a_desc, f"No tags when parallel OFF: {a_desc}";
+
+    # System prompt should not have scheduling hint
+    sys_content = params["messages"][0]["content"];
+    assert "Intelligent tool scheduling rules" not in sys_content, (
+        "No scheduling hint when parallel is OFF"
+    );
+
+    # Cleanup
+    reset_byllm_config();
+}
+
+test "parallel_hint=False suppresses hint even when parallel is on" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def ph_a(x: str) -> str { return x; }
+    tool_a = Tool(func=ph_a, description="Tool A");
+    ft = Tool.make_finish_tool(str);
+
+    model = Model(model_name="mockllm");
+    mt_run = _MockMTRun(
+        call_params={"parallelize": True, "parallel_hint": False},
+        tools=[tool_a, ft],
+        messages=[{"role": "system", "content": "You are helpful."}]
+    );
+
+    params = model.make_model_params(mt_run);
+
+    # Tool descriptions should NOT be annotated
+    a_desc = params["tools"][0]["function"]["description"];
+    assert "[PARALLEL" not in a_desc, f"No tags when parallel_hint=False: {a_desc}";
+
+    # System prompt should NOT have scheduling hint
+    sys_content = params["messages"][0]["content"];
+    assert "Intelligent tool scheduling rules" not in sys_content, (
+        "No hint when parallel_hint=False"
+    );
+
+    # Cleanup
+    reset_byllm_config();
+}
+
+test "serialize tool names listed in system prompt hint" {
+    os.environ.pop("BYLLM_PARALLEL_TOOL_CALLING", None);
+    reset_byllm_config();
+
+    def sn_a(x: str) -> str { return x; }
+    def sn_b(x: str) -> str { return x; }
+    tool_a = Tool(func=sn_a, description="Safe tool");
+    tool_b = Tool(func=sn_b, description="Dangerous tool", serialize=True);
+    ft = Tool.make_finish_tool(str);
+
+    model = Model(model_name="mockllm");
+    mt_run = _MockMTRun(
+        call_params={"parallelize": True},
+        tools=[tool_a, tool_b, ft],
+        messages=[{"role": "system", "content": "You are helpful."}]
+    );
+
+    params = model.make_model_params(mt_run);
+    sys_content = params["messages"][0]["content"];
+    assert "must ALWAYS run alone" in sys_content, (
+        "Serialize tool list should be in system prompt"
+    );
+    assert "sn_b" in sys_content, (
+        "Serialized tool name should appear in system prompt"
+    );
+
+    # Cleanup
+    reset_byllm_config();
 }

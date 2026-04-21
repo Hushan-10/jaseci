@@ -149,62 +149,48 @@ impl BaseLLM.invoke(mt_run: MTRuntime) -> object {
                 else getattr(usage, "total_tokens", 0)
         );
         if resp.tool_calls {
-            if _should_parallelize(mt_run) {
-                # --- Parallel path (supervisor design) ---
-                # Route through dispatch_batch for concurrent execution.
-                non_finish_calls = [
-                    tc
-                    for tc in resp.tool_calls
-                    if not tc.is_finish_call()
-                ];
-                finish_calls = [
-                    tc
-                    for tc in resp.tool_calls
-                    if tc.is_finish_call()
-                ];
+            # Split at first finish_tool — anything after it is discarded.
+            # This normalizes history regardless of parallel/sequential mode:
+            # both modes see the same tool calls and produce the same mt_run.messages.
+            non_finish_calls: list = [];
+            finish_tc = None;
+            for tc in resp.tool_calls {
+                if tc.is_finish_call() {
+                    finish_tc = tc;
+                    break;
+                }
+                non_finish_calls.append(tc);
+            }
 
-                if non_finish_calls {
-                    # Collect results from dispatch_batch generator, then
-                    # add messages in input order for deterministic history.
-                    raw_results: list = list(dispatch_batch(non_finish_calls));
-                    # Reorder by input position using identity comparison.
+            # Always route through dispatch_batch — one code path for both modes.
+            # Parallel: full batch (concurrent). Sequential: one-at-a-time (inline, no pool overhead).
+            if non_finish_calls {
+                batches = (
+                    [non_finish_calls] if _should_parallelize(mt_run)
+                    else [[tc] for tc in non_finish_calls]
+                );
+                for batch in batches {
+                    raw_results: list = list(dispatch_batch(batch));
                     ordered: dict = {};
                     for r in raw_results {
-                        idx = _index_by_identity(non_finish_calls, r[0]);
+                        idx = _index_by_identity(batch, r[0]);
                         ordered[idx] = r;
                     }
-                    for i in range(len(non_finish_calls)) {
-                        (tc, result_msg, _ms) = ordered[i];
-                        last_tool = tc.tool.get_name();
+                    for i in range(len(batch)) {
+                        (btc, result_msg, _ms) = ordered[i];
+                        last_tool = btc.tool.get_name();
                         last_result = str(result_msg.content)[:500];
                         mt_run.add_message(result_msg);
                     }
                 }
+            }
 
-                if finish_calls {
-                    finish_tc = finish_calls[0];
-                    mt_run.add_message(finish_tc());
-                    if mt_run.stream {
-                        return self._stream_final_answer(mt_run);
-                    }
-                    return finish_tc.get_output();
+            if finish_tc {
+                mt_run.add_message(finish_tc());
+                if mt_run.stream {
+                    return self._stream_final_answer(mt_run);
                 }
-            } else {
-                # --- Sequential path (original main branch) ---
-                for tool_call in resp.tool_calls {
-                    if tool_call.is_finish_call() {
-                        mt_run.add_message(tool_call());
-                        if mt_run.stream {
-                            return self._stream_final_answer(mt_run);
-                        }
-                        return tool_call.get_output();
-                    } else {
-                        result_msg = tool_call();
-                        last_tool = tool_call.tool.get_name();
-                        last_result = str(result_msg.content)[:500];
-                        mt_run.add_message(result_msg);
-                    }
-                }
+                return finish_tc.get_output();
             }
         } else {
             # LLM returned plain text without calling any tool.
@@ -771,153 +757,97 @@ impl BaseLLM._invoke_streaming(
             }
 
             if resp.tool_calls {
-                if _should_parallelize(mt_run) {
-                    # --- Parallel streaming path (supervisor design) ---
-                    # Announce all tool calls upfront, dispatch concurrently,
-                    # emit results as workers complete, then add messages in input order.
-                    non_finish_calls = [
-                        tc
-                        for tc in resp.tool_calls
-                        if not tc.is_finish_call()
-                    ];
-                    finish_calls = [
-                        tc
-                        for tc in resp.tool_calls
-                        if tc.is_finish_call()
-                    ];
+                # Split at first finish_tool — normalizes history for both modes.
+                non_finish_calls: list = [];
+                finish_tc = None;
+                for tc in resp.tool_calls {
+                    if tc.is_finish_call() {
+                        finish_tc = tc;
+                        break;
+                    }
+                    non_finish_calls.append(tc);
+                }
 
-                    if non_finish_calls {
-                        # Announce all tools before any execution starts
-                        for tc in non_finish_calls {
+                if non_finish_calls {
+                    max_result_len = int(
+                        mt_run.call_params.get("max_tool_result_length")
+                        or self.call_params.get("max_tool_result_length")
+                        or _call_params_config.get("max_tool_result_length")
+                        or 500
+                    );
+
+                    # Parallel: full batch. Sequential: one-at-a-time via dispatch_batch.
+                    batches = (
+                        [non_finish_calls] if _should_parallelize(mt_run)
+                        else [[tc] for tc in non_finish_calls]
+                    );
+
+                    for batch in batches {
+                        # Announce tool calls before execution
+                        for btc in batch {
                             yield StreamEvent(
                                 event_type="tool_call",
                                 data={
-                                    "tool": tc.tool.get_name(),
-                                    "args": tc.args,
-                                    "call_id": tc.call_id,
+                                    "tool": btc.tool.get_name(),
+                                    "args": btc.args,
+                                    "call_id": btc.call_id,
                                     "iteration": iter_count
                                 }
                             );
                         }
 
-                        # Execute via dispatch_batch — streams results as workers complete.
-                        # Collect all results, then add to mt_run in input order.
+                        # Execute via dispatch_batch, emit results as they complete
                         raw_results: list = [];
-
-                        max_result_len = int(
-                            mt_run.call_params.get("max_tool_result_length")
-                            or self.call_params.get("max_tool_result_length")
-                            or _call_params_config.get("max_tool_result_length")
-                            or 500
-                        );
-
-                        for (tc, result_msg, tool_ms) in dispatch_batch(
-                            non_finish_calls
-                        ) {
+                        for (btc, result_msg, tool_ms) in dispatch_batch(batch) {
                             truncated_result = result_msg.content[:max_result_len];
-                            last_tool = tc.tool.get_name();
+                            last_tool = btc.tool.get_name();
                             last_result = truncated_result;
                             yield StreamEvent(
                                 event_type="tool_result",
                                 data={
-                                    "tool": tc.tool.get_name(),
+                                    "tool": btc.tool.get_name(),
                                     "result": truncated_result,
-                                    "call_id": tc.call_id,
+                                    "call_id": btc.call_id,
                                     "iteration": iter_count
                                 }
                             );
                             yield StreamEvent(
                                 event_type="tool_timing",
                                 data={
-                                    "tool": tc.tool.get_name(),
+                                    "tool": btc.tool.get_name(),
                                     "duration_ms": tool_ms,
-                                    "call_id": tc.call_id,
+                                    "call_id": btc.call_id,
                                     "iteration": iter_count
                                 }
                             );
-                            raw_results.append((tc, result_msg, tool_ms));
+                            raw_results.append((btc, result_msg, tool_ms));
                         }
 
-                        # Add messages to mt_run in input order for deterministic history.
+                        # Add messages in input order for deterministic history
                         ordered: dict = {};
                         for r in raw_results {
-                            idx = _index_by_identity(non_finish_calls, r[0]);
+                            idx = _index_by_identity(batch, r[0]);
                             ordered[idx] = r;
                         }
-                        for i in range(len(non_finish_calls)) {
+                        for i in range(len(batch)) {
                             mt_run.add_message(ordered[i][1]);
                         }
                     }
+                }
 
-                    if finish_calls {
-                        finish_tc = finish_calls[0];
-                        mt_run.add_message(finish_tc());
-                        yield StreamEvent(
-                            event_type="steps_done", data={"iterations": iter_count}
-                        );
-                        for token in self._stream_final_answer(mt_run) {
-                            if token {
-                                yield StreamEvent(
-                                    event_type="chunk", data={"content": token}
-                                );
-                            }
-                        }
-                        break;
-                    }
-                } else {
-                    # --- Sequential streaming path (original main branch) ---
-                    for tool_call in resp.tool_calls {
-                        if tool_call.is_finish_call() {
-                            mt_run.add_message(tool_call());
+                if finish_tc {
+                    mt_run.add_message(finish_tc());
+                    yield StreamEvent(
+                        event_type="steps_done", data={"iterations": iter_count}
+                    );
+                    for token in self._stream_final_answer(mt_run) {
+                        if token {
                             yield StreamEvent(
-                                event_type="steps_done", data={"iterations": iter_count}
+                                event_type="chunk", data={"content": token}
                             );
-                            for token in self._stream_final_answer(mt_run) {
-                                if token {
-                                    yield StreamEvent(
-                                        event_type="chunk", data={"content": token}
-                                    );
-                                }
-                            }
-                            break;
-                        } else {
-                            # Yield tool_call event before execution
-                            yield StreamEvent(
-                                event_type="tool_call",
-                                data={
-                                    "tool": tool_call.tool.get_name(),
-                                    "args": tool_call.args,
-                                    "call_id": tool_call.call_id,
-                                    "iteration": iter_count
-                                }
-                            );
-                            # Execute the tool
-                            result_msg = tool_call();
-                            last_tool = tool_call.tool.get_name();
-                            max_result_len = int(
-                                mt_run.call_params.get("max_tool_result_length")
-                                or self.call_params.get("max_tool_result_length")
-                                or _call_params_config.get("max_tool_result_length")
-                                or 500
-                            );
-                            truncated_result = result_msg.content[:max_result_len];
-                            last_result = truncated_result;
-                            yield StreamEvent(
-                                event_type="tool_result",
-                                data={
-                                    "tool": tool_call.tool.get_name(),
-                                    "result": truncated_result,
-                                    "call_id": tool_call.call_id,
-                                    "iteration": iter_count
-                                }
-                            );
-                            mt_run.add_message(result_msg);
                         }
                     }
-                    # If we broke out of the for loop due to finish_tool, break the while loop too
-                    if tool_call.is_finish_call() {
-                        break;
-                    }
+                    break;
                 }
             } else {
                 # No tool calls — check if recovery is needed.
