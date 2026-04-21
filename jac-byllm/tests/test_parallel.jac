@@ -771,6 +771,7 @@ test "serialize tool names listed in system prompt hint" {
         "Serialized tool name should appear in system prompt"
     );
 
+
     # Cleanup
     reset_byllm_config();
 }
