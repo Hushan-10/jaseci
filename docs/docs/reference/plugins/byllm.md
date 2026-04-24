@@ -778,21 +778,22 @@ Some tools have side effects (writing files, mutating state) and must not run co
 import from byllm.lib { mark_serialize }
 
 def read_data(key: str) -> str {
-    return db.get(key);
+    return "value";
 }
 
 def write_data(key: str, value: str) -> str {
-    db.set(key, value);
     return "ok";
 }
-
-# Mark the write tool - must not run concurrently
-mark_serialize(write_data);
 
 def agent(task: str) -> str by llm(
     tools=[read_data, write_data],
     parallelize=True
 );
+
+with entry {
+    # Mark the write tool — must not run concurrently
+    mark_serialize(write_data);
+}
 ```
 
 When parallel mode is active, `dispatch_batch` checks each batch:
@@ -874,14 +875,16 @@ def save_to_db(data: str) -> str {
     return "Saved";
 }
 
-# search and fetch_url are safe to run concurrently
-# save_to_db mutates state - must run alone
-mark_serialize(save_to_db);
-
 def research_agent(task: str) -> str by llm(
     tools=[search, fetch_url, save_to_db],
     parallelize=True
 );
+
+with entry {
+    # search and fetch_url are safe to run concurrently
+    # save_to_db mutates state — must run alone
+    mark_serialize(save_to_db);
+}
 ```
 
 When the LLM emits `search + fetch_url`, they run in parallel. When the LLM includes `save_to_db` in a batch, the entire batch runs sequentially.
