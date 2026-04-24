@@ -729,7 +729,7 @@ The callback fires **between iterations**, not between individual tool calls. If
 
 ## Parallel Tool Calling
 
-When a `by llm()` function uses tools, the LLM may emit multiple tool calls in a single response. By default, these run one at a time. With parallel tool calling enabled, byLLM runs them concurrently via a shared thread pool — reducing wall-clock time when tools involve I/O (API calls, file reads, database queries).
+When a `by llm()` function uses tools, the LLM may emit multiple tool calls in a single response. By default, these run one at a time. With parallel tool calling enabled, byLLM runs them concurrently via a shared thread pool - reducing wall-clock time when tools involve I/O (API calls, file reads, database queries).
 
 ### How It Works
 
@@ -740,7 +740,7 @@ Parallel (enabled):       tool_A (1s) ┐
                           tool_C (1s) ┘
 ```
 
-The LLM decides which tools to batch — byLLM runs whatever the LLM emits together in a single response concurrently. Tools emitted in separate responses always run sequentially.
+The LLM decides which tools to batch - byLLM runs whatever the LLM emits together in a single response concurrently. Tools emitted in separate responses always run sequentially.
 
 ### Enabling Parallel Mode
 
@@ -768,7 +768,8 @@ Three levels of control, from broadest to most specific:
     ```
     Overrides both global config and env var for this specific call.
 
-**Default is sequential** — parallel must be explicitly enabled via at least one of the three mechanisms.
+
+**Default is sequential** - parallel must be explicitly enabled via at least one of the three mechanisms.
 
 ### Marking Tools as Sequential
 
@@ -786,7 +787,7 @@ def write_data(key: str, value: str) -> str {
     return "ok";
 }
 
-# Mark the write tool — must not run concurrently
+# Mark the write tool - must not run concurrently
 mark_serialize(write_data);
 
 def agent(task: str) -> str by llm(
@@ -807,16 +808,16 @@ When parallel mode is active, `dispatch_batch` checks each batch:
 
 When parallel is active, byLLM automatically helps the LLM make smart batching decisions:
 
-1. **Tool annotations** — each tool's description gets a tag:
+1. **Tool annotations** - each tool's description gets a tag:
     - `[PARALLEL-SAFE]` for normal tools
     - `[SEQUENTIAL]` for tools marked with `mark_serialize()`
 
-2. **Scheduling hints** — rules injected into the system prompt:
+2. **Scheduling hints** - rules injected into the system prompt:
     - Batch when all arguments are known upfront and no tool needs another's output
     - Separate when one tool's argument depends on another's return value
     - The "key test": *Can I fill ALL of this tool's arguments RIGHT NOW?*
 
-The LLM uses these signals to decide what to emit together vs. separately. Independent lookups get batched; dependent chains stay sequential — automatically.
+The LLM uses these signals to decide what to emit together vs. separately. Independent lookups get batched; dependent chains stay sequential - automatically.
 
 ### Configuration
 
@@ -875,7 +876,7 @@ def save_to_db(data: str) -> str {
 }
 
 # search and fetch_url are safe to run concurrently
-# save_to_db mutates state — must run alone
+# save_to_db mutates state - must run alone
 mark_serialize(save_to_db);
 
 def research_agent(task: str) -> str by llm(
