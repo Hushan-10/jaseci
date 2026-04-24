@@ -767,7 +767,6 @@ Three levels of control, from broadest to most specific:
     );
     ```
     Overrides both global config and env var for this specific call.
-    
 
 **Default is sequential** — parallel must be explicitly enabled via at least one of the three mechanisms.
 
