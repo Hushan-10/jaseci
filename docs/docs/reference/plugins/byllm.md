@@ -791,7 +791,7 @@ def agent(task: str) -> str by llm(
 );
 
 with entry {
-    # Mark the write tool — must not run concurrently
+    # Mark the write tool - must not run concurrently
     mark_serialize(write_data);
 }
 ```
@@ -882,7 +882,7 @@ def research_agent(task: str) -> str by llm(
 
 with entry {
     # search and fetch_url are safe to run concurrently
-    # save_to_db mutates state — must run alone
+    # save_to_db mutates state - must run alone
     mark_serialize(save_to_db);
 }
 ```
