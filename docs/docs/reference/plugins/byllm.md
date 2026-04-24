@@ -306,6 +306,9 @@ strategy = "fallback"             # Default ModelPool routing strategy
 num_retries = 1                   # Retries per deployment
 timeout = 60.0                    # Per-request timeout in seconds
 
+[plugins.byllm.parallel]
+enabled = false                   # Parallel tool execution (concurrent dispatch)
+
 [plugins.byllm.prompt_caching]
 enabled = true                    # Anthropic prompt caching (auto for Claude models)
 ```
@@ -334,6 +337,12 @@ enabled = true                    # Anthropic prompt caching (auto for Claude mo
 | `local_cost_map` | bool | `true` | Use local cost map instead of fetching from remote |
 | `drop_params` | bool | `true` | Silently drop parameters unsupported by the chosen provider |
 | `debug` | bool | `false` | Enable verbose LiteLLM logging (HTTP requests, retries, headers). When `false`, LiteLLM's internal loggers are silenced. Exceptions are always logged via byLLM's own logger regardless of this setting |
+
+**`[plugins.byllm.parallel]` options:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Enable parallel tool execution. When the LLM emits multiple tool calls in one response, run them concurrently via a shared thread pool. Can also be enabled via `BYLLM_PARALLEL_TOOL_CALLING=true` env var or per-call `parallelize=True`. See [Parallel Tool Calling](#parallel-tool-calling) for details |
 
 **`[plugins.byllm.prompt_caching]` options:**
 
@@ -521,6 +530,7 @@ Parameters passed to `by llm()` at call time:
 | `logging` | bool | When combined with `stream=True`, yields `StreamEvent` objects instead of raw tokens. Shows intermediate steps (tool calls, results, thoughts). Default: `False` |
 | `max_react_iterations` | int | Maximum ReAct iterations before forcing final answer |
 | `on_iteration` | callable | Callback fired between ReAct iterations. Receives `IterationContext`, returns `IterationAction` (`CONTINUE`, `ABORT`, `ABORT_WITH_SUMMARY`). Enables external loop control (stop buttons, token budgets, doom-loop detection) |
+| `parallelize` | bool | Enable parallel tool execution for this call. Overrides global `[plugins.byllm.parallel]` config. Default: inherits global setting |
 | `max_tool_result_length` | int | Maximum characters for tool results in `StreamEvent` data (full result stays in LLM context). Default: 500 |
 
 !!! warning "Deprecated: `method` parameter"
@@ -714,6 +724,186 @@ def agent_task(question: str) -> str by llm(
 | `ABORT_WITH_SUMMARY` | Stop and ask LLM for a final summary |
 
 The callback fires **between iterations**, not between individual tool calls. If the LLM batches multiple tool calls in one iteration, all execute before the callback fires. No callback = old behavior.
+
+---
+
+## Parallel Tool Calling
+
+When a `by llm()` function uses tools, the LLM may emit multiple tool calls in a single response. By default, these run one at a time. With parallel tool calling enabled, byLLM runs them concurrently via a shared thread pool — reducing wall-clock time when tools involve I/O (API calls, file reads, database queries).
+
+### How It Works
+
+```
+Sequential (default):     tool_A (1s) → tool_B (1s) → tool_C (1s) = 3s
+Parallel (enabled):       tool_A (1s) ┐
+                          tool_B (1s) ├→ all complete in ~1s
+                          tool_C (1s) ┘
+```
+
+The LLM decides which tools to batch — byLLM runs whatever the LLM emits together in a single response concurrently. Tools emitted in separate responses always run sequentially.
+
+### Enabling Parallel Mode
+
+Three levels of control, from broadest to most specific:
+
+=== "Project-wide (jac.toml)"
+    ```toml
+    [plugins.byllm.parallel]
+    enabled = true
+    ```
+    All `by llm()` calls in the project use parallel dispatch.
+
+=== "Environment Variable"
+    ```bash
+    export BYLLM_PARALLEL_TOOL_CALLING=true
+    ```
+    Overrides `jac.toml`. Useful for CI or per-run toggling.
+
+=== "Per-call (inline)"
+    ```jac
+    def my_agent(query: str) -> str by llm(
+        tools=[search, fetch, analyze],
+        parallelize=True   # only this call uses parallel
+    );
+    ```
+    Overrides both global config and env var for this specific call.
+    
+
+**Default is sequential** — parallel must be explicitly enabled via at least one of the three mechanisms.
+
+### Marking Tools as Sequential
+
+Some tools have side effects (writing files, mutating state) and must not run concurrently. Use `mark_serialize()` to flag them:
+
+```jac
+import from byllm.lib { mark_serialize }
+
+def read_data(key: str) -> str {
+    return db.get(key);
+}
+
+def write_data(key: str, value: str) -> str {
+    db.set(key, value);
+    return "ok";
+}
+
+# Mark the write tool — must not run concurrently
+mark_serialize(write_data);
+
+def agent(task: str) -> str by llm(
+    tools=[read_data, write_data],
+    parallelize=True
+);
+```
+
+When parallel mode is active, `dispatch_batch` checks each batch:
+
+- If **any** tool in the batch has `serialize=True` → the entire batch runs sequentially
+- If **all** tools are parallel-safe → the batch runs concurrently
+
+!!! note
+    `mark_serialize` applies to the function globally. All `by llm()` calls that include the marked tool will respect the constraint.
+
+### Intelligent Scheduling
+
+When parallel is active, byLLM automatically helps the LLM make smart batching decisions:
+
+1. **Tool annotations** — each tool's description gets a tag:
+    - `[PARALLEL-SAFE]` for normal tools
+    - `[SEQUENTIAL]` for tools marked with `mark_serialize()`
+
+2. **Scheduling hints** — rules injected into the system prompt:
+    - Batch when all arguments are known upfront and no tool needs another's output
+    - Separate when one tool's argument depends on another's return value
+    - The "key test": *Can I fill ALL of this tool's arguments RIGHT NOW?*
+
+The LLM uses these signals to decide what to emit together vs. separately. Independent lookups get batched; dependent chains stay sequential — automatically.
+
+### Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `BYLLM_TOOL_WORKERS` | `min(32, cpu_count * 5)` | Max threads in the shared pool (env var) |
+| `parallel_hint` | `True` | Pass `parallel_hint=False` in `by llm()` to disable scheduling hints while keeping parallel execution |
+
+### Example: Weather Lookup
+
+```jac
+import from byllm.lib { Model }
+
+glob llm = Model(model_name="gpt-4o-mini");
+
+def get_weather(city: str) -> str {
+    # Simulates a 1-second API call
+    import time;
+    time.sleep(1.0);
+    return f"{city}: 22°C, sunny";
+}
+
+sem get_weather = "Get current weather for a city.";
+
+def multi_weather(question: str) -> str by llm(
+    tools=[get_weather],
+    parallelize=True
+);
+
+with entry {
+    # LLM emits 3 get_weather calls → all run in ~1s instead of ~3s
+    result = multi_weather(
+        "What's the weather in Tokyo, Paris, and New York?"
+    );
+    print(result);
+}
+```
+
+### Example: Mixed Safe and Unsafe Tools
+
+```jac
+import from byllm.lib { Model, mark_serialize }
+
+glob llm = Model(model_name="gpt-4o-mini");
+
+def search(query: str) -> str {
+    return f"Results for '{query}'";
+}
+
+def fetch_url(url: str) -> str {
+    return f"Content from {url}";
+}
+
+def save_to_db(data: str) -> str {
+    return "Saved";
+}
+
+# search and fetch_url are safe to run concurrently
+# save_to_db mutates state — must run alone
+mark_serialize(save_to_db);
+
+def research_agent(task: str) -> str by llm(
+    tools=[search, fetch_url, save_to_db],
+    parallelize=True
+);
+```
+
+When the LLM emits `search + fetch_url`, they run in parallel. When the LLM includes `save_to_db` in a batch, the entire batch runs sequentially.
+
+### Verifying Parallel Execution
+
+Enable INFO logging to see dispatch decisions:
+
+```bash
+BYLLM_LOG_LEVEL=INFO jac run my_agent.jac
+```
+
+Look for these log lines from `byllm.parallel`:
+
+```
+batch dispatch=parallel size=3 workers=3 tools=['get_weather', 'get_weather', 'get_weather']
+batch done=parallel size=3 workers=3 wall_ms=1012
+```
+
+- `dispatch=parallel` confirms concurrent execution
+- `wall_ms=~1000` for 3 tools that each sleep 1s proves they ran in parallel (sequential would show ~3000)
 
 ---
 
