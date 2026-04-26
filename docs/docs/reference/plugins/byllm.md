@@ -729,9 +729,7 @@ The callback fires **between iterations**, not between individual tool calls. If
 
 ## Parallel Tool Calling
 
-When a `by llm()` function uses tools, the LLM may emit multiple tool calls in a single response. By default, these run one at a time. With parallel tool calling enabled, byLLM runs them concurrently via a shared thread pool - reducing wall-clock time when tools involve I/O (API calls, file reads, database queries).
-
-### How It Works
+When the LLM emits multiple tool calls in a single response, byLLM can run them concurrently via a shared thread pool instead of one at a time. This reduces wall-clock time when tools involve I/O (API calls, file reads, database queries).
 
 ```
 Sequential (default):     tool_A (1s) → tool_B (1s) → tool_C (1s) = 3s
@@ -763,38 +761,16 @@ Three levels of control, from broadest to most specific:
     ```jac
     def my_agent(query: str) -> str by llm(
         tools=[search, fetch, analyze],
-        parallelize=True   # only this call uses parallel
+        parallelize=True
     );
     ```
     Overrides both global config and env var for this specific call.
 
-**Default is sequential** - parallel must be explicitly enabled via at least one of the three mechanisms.
+Default is sequential -- parallel must be explicitly enabled.
 
 ### Marking Tools as Sequential
 
-Some tools have side effects (writing files, mutating state) and must not run concurrently. Use `mark_serialize()` to flag them:
-
-```jac
-import from byllm.lib { mark_serialize }
-
-def read_data(key: str) -> str {
-    return "value";
-}
-
-def write_data(key: str, value: str) -> str {
-    return "ok";
-}
-
-def agent(task: str) -> str by llm(
-    tools=[read_data, write_data],
-    parallelize=True
-);
-
-with entry {
-    # Mark the write tool - must not run concurrently
-    mark_serialize(write_data);
-}
-```
+Some tools have side effects (writing files, mutating state) and must not run concurrently. Use `mark_serialize()` to flag them.
 
 When parallel mode is active, `dispatch_batch` checks each batch:
 
@@ -808,16 +784,47 @@ When parallel mode is active, `dispatch_batch` checks each batch:
 
 When parallel is active, byLLM automatically helps the LLM make smart batching decisions:
 
-1. **Tool annotations** - each tool's description gets a tag:
-    - `[PARALLEL-SAFE]` for normal tools
-    - `[SEQUENTIAL]` for tools marked with `mark_serialize()`
+- **Tool annotations** -- each tool's description gets a `[PARALLEL-SAFE]` or `[SEQUENTIAL]` tag
+- **Scheduling hints** -- rules injected into the system prompt guiding the LLM to batch when all arguments are known upfront and sequence when one tool depends on another's output
 
-2. **Scheduling hints** - rules injected into the system prompt:
-    - Batch when all arguments are known upfront and no tool needs another's output
-    - Separate when one tool's argument depends on another's return value
-    - The "key test": *Can I fill ALL of this tool's arguments RIGHT NOW?*
+### Example
 
-The LLM uses these signals to decide what to emit together vs. separately. Independent lookups get batched; dependent chains stay sequential - automatically.
+```jac
+import from byllm.lib { Model, mark_serialize }
+
+glob llm = Model(model_name="gpt-5.2");
+
+def get_weather(city: str) -> str {
+    import time;
+    time.sleep(1.0);
+    return f"{city}: 22°C, sunny";
+}
+
+sem get_weather = "Get current weather for a city.";
+
+def save_log(message: str) -> str {
+    return f"Logged: {message}";
+}
+
+sem save_log = "Save a message to the activity log. Has side effects.";
+
+def weather_agent(question: str) -> str by llm(
+    tools=[get_weather, save_log],
+    parallelize=True
+);
+
+with entry {
+    mark_serialize(save_log);
+
+    # LLM emits 3 get_weather calls in parallel (~1s instead of ~3s)
+    # save_log is serialized -- any batch containing it runs sequentially.
+    # Intelligent LLMs won't mix [PARALLEL-SAFE] and [SEQUENTIAL] tools in the same batch
+    result = weather_agent(
+        "What's the weather in Tokyo, Paris, and New York?"
+    );
+    print(result);
+}
+```
 
 ### Configuration
 
@@ -826,87 +833,13 @@ The LLM uses these signals to decide what to emit together vs. separately. Indep
 | `BYLLM_TOOL_WORKERS` | `min(32, cpu_count * 5)` | Max threads in the shared pool (env var) |
 | `parallel_hint` | `True` | Pass `parallel_hint=False` in `by llm()` to disable scheduling hints while keeping parallel execution |
 
-### Example: Weather Lookup
-
-```jac
-import from byllm.lib { Model }
-
-glob llm = Model(model_name="gpt-4o-mini");
-
-def get_weather(city: str) -> str {
-    # Simulates a 1-second API call
-    import time;
-    time.sleep(1.0);
-    return f"{city}: 22°C, sunny";
-}
-
-sem get_weather = "Get current weather for a city.";
-
-def multi_weather(question: str) -> str by llm(
-    tools=[get_weather],
-    parallelize=True
-);
-
-with entry {
-    # LLM emits 3 get_weather calls → all run in ~1s instead of ~3s
-    result = multi_weather(
-        "What's the weather in Tokyo, Paris, and New York?"
-    );
-    print(result);
-}
-```
-
-### Example: Mixed Safe and Unsafe Tools
-
-```jac
-import from byllm.lib { Model, mark_serialize }
-
-glob llm = Model(model_name="gpt-4o-mini");
-
-def search(query: str) -> str {
-    return f"Results for '{query}'";
-}
-
-def fetch_url(url: str) -> str {
-    return f"Content from {url}";
-}
-
-def save_to_db(data: str) -> str {
-    return "Saved";
-}
-
-def research_agent(task: str) -> str by llm(
-    tools=[search, fetch_url, save_to_db],
-    parallelize=True
-);
-
-
-with entry {
-    # search and fetch_url are safe to run concurrently
-    # save_to_db mutates state - must run alone
-    mark_serialize(save_to_db);
-}
-```
-
-When the LLM emits `search + fetch_url`, they run in parallel. When the LLM includes `save_to_db` in a batch, the entire batch runs sequentially.
-
 ### Verifying Parallel Execution
-
-Enable INFO logging to see dispatch decisions:
 
 ```bash
 BYLLM_LOG_LEVEL=INFO jac run my_agent.jac
 ```
 
-Look for these log lines from `byllm.parallel`:
-
-```
-batch dispatch=parallel size=3 workers=3 tools=['get_weather', 'get_weather', 'get_weather']
-batch done=parallel size=3 workers=3 wall_ms=1012
-```
-
-- `dispatch=parallel` confirms concurrent execution
-- `wall_ms=~1000` for 3 tools that each sleep 1s proves they ran in parallel (sequential would show ~3000)
+Look for `byllm.parallel` log lines: `dispatch=parallel` confirms concurrent execution, `wall_ms` shows wall-clock time (e.g. ~1000ms for 3 tools that each take 1s proves they ran in parallel)
 
 ---
 
