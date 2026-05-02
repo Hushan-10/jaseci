@@ -819,6 +819,12 @@ glob E0001 = _err("E0001", Category.SYNTAX, "Expected '{expected}', got '{got}'"
          Category.CODEGEN,
          "Walker spawn has more positional arguments than fields."
      ),
+     W5015 = _warn(
+         "W5015",
+         Category.CODEGEN,
+         "Component '{component}' takes a single 'props' bundle — JSX call sites are not type-checked per prop.",
+         help="Prefer direct named params (e.g. `def {component}(name: str, age: int)`); suppress with `# jac:ignore[W5015]` only when intentionally forwarding the bundle."
+     ),
      # Native compile
      E5020 = _err("E5020", Category.CODEGEN, "Native compilation failed: {error}"),
      W5021 = _warn("W5021", Category.CODEGEN, "C library not found: {path}"),

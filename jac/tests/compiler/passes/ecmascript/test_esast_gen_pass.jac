@@ -478,3 +478,39 @@ test "stale has read emits W3041" {
         )
     );
 }
+
+test "single-`props` component definition warns W5015" {
+    fixture = fixture_path("component_props_idiom.cl.jac");
+    prog = JacProgram();
+    ir = prog.compile(file_path=fixture, no_cgen=True);
+    assert not prog.errors_had , (
+        f"Compilation errors in {fixture}: {[str(e) for e in prog.errors_had]}"
+    );
+    EsastGenPass(ir_in=ir, prog=prog);
+
+    w5015 = [
+        w
+        for w in prog.warnings_had
+        if w.code is not None and w.code.code == "W5015"
+    ];
+    msgs = [str(w) for w in w5015];
+
+    # Only the JS-idiomatic single-`props` shape sacrifices per-prop call-site
+    # validation, so JsPropsStyle is the one and only component that warns.
+    assert len(w5015) == 1 , (
+        f"Expected exactly one W5015 (JsPropsStyle), got {len(w5015)}: {msgs}"
+    );
+    assert any("JsPropsStyle" in m for m in msgs) , (
+        f"W5015 should name the offending component 'JsPropsStyle', got: {msgs}"
+    );
+
+    # The Jac-idiomatic shapes (direct named params, or a typed single-key
+    # bundle whose name isn't the `props` keyword) must not warn — both
+    # preserve per-prop validation at JSX call sites.
+    assert not any("DirectStyle" in m for m in msgs) , (
+        f"DirectStyle (multi-param) should not warn, got: {msgs}"
+    );
+    assert not any("SingleKeyStyle" in m for m in msgs) , (
+        f"SingleKeyStyle (typed single-key bundle) should not warn, got: {msgs}"
+    );
+}
