@@ -104,7 +104,7 @@ declaration/implementation separation (.jac + .impl.jac split).
   jac://examples/littleX       [S] full-stack social app (real-world OSP)
 
 Available example categories (use ONLY these names with get_example):
-  chess, littleX, manual_code, micro, plugins, rpg_game, shopping_cart
+  chess, littleX, manual_code
 
 ### [G] Code Organization & Project Structure
 
@@ -150,7 +150,6 @@ decorators, @property). Prefer `obj` for everything else.
                 jac://docs/jac-scale [L]
 
   jac-shadcn  - UI component library (shadcn/ui components for cl blocks).
-                jac://examples/plugins [S]
 
 ---
 
@@ -177,4 +176,4 @@ decorators, @property). Prefer `obj` for everything else.
   Write tests                             | jac://docs/testing
   See a working example                   | jac://examples/littleX
   Understand project file layout          | jac://docs/code-organization
-  Discover available plugins              | jac://examples/plugins + list_templates tool
+  Discover available plugins              | list_templates tool

@@ -15,7 +15,8 @@ import from jaclang.jac0core.runtime { JacRuntime }
 
 glob JAC_ROOT = str(Path(jaclang.__file__).parent.parent),
      FIXTURES = os.path.join(JAC_ROOT, "tests", "language", "fixtures"),
-     EXAMPLES = os.path.join(JAC_ROOT, "examples");
+     EXAMPLES = os.path.join(JAC_ROOT, "examples"),
+     COMPILER_FIXTURES = os.path.join(JAC_ROOT, "tests", "compiler", "fixtures");
 
 """Import a .jac file as __main__ and return its captured stdout."""
 def run_jac(filepath: str) -> str {
@@ -774,19 +775,19 @@ test "visit traversal" {
     assert "MyWalker() from node MyNode(val=70)" in lines[9];
 }
 
-# ── Tests using examples_path ────────────────────────────────────────────────
+# ── Tests using micro fixtures ───────────────────────────────────────────────
 test "simple jac red" {
-    output = run_module("micro.simple_walk", EXAMPLES, as_main=True);
+    output = run_module("micro.simple_walk", COMPILER_FIXTURES, as_main=True);
     assert output == "Value: -1\nValue: 0\nValue: 1\nValue: 2\nValue: 3\nValue: 4\nValue: 5\nValue: 6\nValue: 7\nFinal Value: 8\nDone walking.\n";
 }
 
 test "simple walk by edge" {
-    output = run_module("micro.simple_walk_by_edge", EXAMPLES);
+    output = run_module("micro.simple_walk_by_edge", COMPILER_FIXTURES);
     assert output == "Visited 1\nVisited 2\n";
 }
 
 test "typed filter compr" {
-    output = run_module("micro.typed_filter_compr", EXAMPLES);
+    output = run_module("micro.typed_filter_compr", COMPILER_FIXTURES);
     assert "[MyObj(a=0), MyObj2(a=2), MyObj(a=1), MyObj2(a=3), MyObj(a=2), MyObj(a=3)]\n" in output;
     assert "[MyObj(a=0), MyObj(a=1), MyObj(a=2)]\n" in output;
 }

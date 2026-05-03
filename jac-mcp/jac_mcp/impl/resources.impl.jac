@@ -555,11 +555,7 @@ impl ResourceProvider._index_examples_local(examples_dir: Path) -> None {
     EXAMPLE_DESCRIPTIONS: dict[str, str] = {
         "chess": "Native chess engine, backend-only, no graph traversal. Demonstrates declaration/impl separation, enums, obj inheritance, and the Jac type system.",
         "littleX": "Full-stack social app (Twitter-like), OSP graph with user profiles and NLP-based search (sklearn/TF-IDF). Real-world object-spatial design.",
-        "manual_code": "Circle class showcasing declaration/impl separation and unit tests. Clean OOP reference, no graph traversal.",
-        "micro": "Micro-snippets for individual language features: access modifiers, comprehensions, statements, class patterns. Quick syntax reference.",
-        "plugins": "Plugin development, CLI command extension and walker REST API via jac-scale. Shows how to extend Jac's toolchain.",
-        "rpg_game": "2D RPG game using library mode, Python interop with pygame for sprites and maps. Native/lib mode integration example.",
-        "shopping_cart": "E-commerce shopping cart, obj-based domain model with metadata and datetime. OOP-style Jac without graph traversal."
+        "manual_code": "Circle class showcasing declaration/impl separation and unit tests. Clean OOP reference, no graph traversal."
     };
     categories: list[str] = [];
     for entry in sorted(examples_dir.iterdir()) {
