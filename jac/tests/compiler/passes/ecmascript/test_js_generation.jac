@@ -788,6 +788,34 @@ test "sv import kwargs preserve names in production jac2js path" {
     );
 }
 
+test "sv import wrapper covers posonly and kwonly params" {
+    # Regression for the latent stub-generation bug: ``_generate_sv_import_stubs``
+    # used to walk only ``sig.params`` (regular non-posonly non-kwonly), so
+    # posonly/kwonly params silently disappeared from the generated wrapper —
+    # both from its JS function signature and from the ``__jacCallFunction``
+    # args object.  After unifying on ``_param_names_from_ability``, all three
+    # buckets are walked and the wrapper's shape matches the source ability.
+    fixture = "sv_import_posonly_kwonly_client.cl.jac";
+    js_code = compile_fixture_to_js_production(fixture, FIXTURES);
+    compact_js = js_code.replace("\n", "").replace(" ", "");
+
+    # Wrapper signature must list params in declared order — filter (posonly),
+    # query (regular), scope (kwonly).
+    assert "asyncfunctionquery(filter,query,scope)" in compact_js , (
+        "sv-import wrapper must include posonly + kwonly params in its JS " + "signature, not silently drop them;\ngot:\n" + js_code
+    );
+    # All three params must appear in the RPC args object the wrapper posts.
+    assert (
+        '__jacCallFunction("query",{"filter":filter,"query":query,"scope":scope})' in compact_js
+    ) , (
+        "sv-import wrapper must forward posonly + kwonly params in the RPC " + "args object;\ngot:\n" + js_code
+    );
+    # Pre-fix bug shape: a one-arg wrapper that posts only the regular param.
+    assert "asyncfunctionquery(query)" not in compact_js , (
+        "Wrapper must not regress to walking only sig.params (which would drop " + "posonly + kwonly);\ngot:\n" + js_code
+    );
+}
+
 test "plain client kwargs lower to ordered js arguments" {
     fixture = "plain_kwargs_client.cl.jac";
     js_code = compile_fixture_to_js_production(fixture, FIXTURES);

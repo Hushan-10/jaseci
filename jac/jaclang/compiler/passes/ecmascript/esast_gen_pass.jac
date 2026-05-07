@@ -310,6 +310,26 @@ obj EsastGenPass(BaseAstGenPass[es.Statement]) {
     def _resolve_sv_import_ability(name: str) -> (uni.Ability | None);
     def _resolve_call_ability(nd: uni.FuncCall) -> (uni.Ability | None);
     def _param_names_from_ability(ability_node: uni.Ability) -> list[str];
+    def _param_type_map_from_ability(ability_node: uni.Ability) -> dict[(str, str)];
+    def _wrap_to_wire_if_boundary(
+        expr: es.Expression,
+        type_name: str,
+        boundary_types: dict[(str, Any)],
+        jac_node: uni.UniNode
+    ) -> es.Expression;
+
+    def _extract_return_type(
+        ability_node: uni.Ability, func_name: str, manifest: Any
+    ) -> str;
+
+    def _wrap_return_with_boundary(
+        call_expr: es.Expression,
+        ret_type: str,
+        boundary_types: dict[(str, Any)],
+        jac_node: uni.UniNode,
+        pre_awaited: bool
+    ) -> es.Expression;
+
     def _resolve_call_arg_slots(
         nd: uni.FuncCall,
         args: list[(es.Expression | es.SpreadElement)],
@@ -331,9 +351,19 @@ obj EsastGenPass(BaseAstGenPass[es.Statement]) {
         props: list[(es.Property | es.SpreadElement)]
     ) -> bool;
 
+    def _make_kwargs_spread_context(
+        props: list[(es.Property | es.SpreadElement)], nd: uni.FuncCall
+    ) -> tuple[((es.Expression | None), (es.Expression | None))];
+
     def _wrap_with_kwargs_temp(
         expr: es.Expression, spread_arg: es.Expression, nd: uni.FuncCall
     ) -> es.Expression;
+
+    def _try_lower_server_rpc_call(
+        nd: uni.FuncCall,
+        args: list[(es.Expression | es.SpreadElement)],
+        props: list[(es.Property | es.SpreadElement)]
+    ) -> (es.Expression | None);
 
     def exit_func_call(nd: uni.FuncCall) -> None;
     def exit_index_slice(nd: uni.IndexSlice) -> None;
