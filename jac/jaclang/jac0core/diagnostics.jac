@@ -492,6 +492,16 @@ glob E0001 = _err("E0001", Category.SYNTAX, "Expected '{expected}', got '{got}'"
          Category.IMPORT,
          "Imported name '{name}' from foreign-source module '{module}' typed as Any"
      ),
+     W1103 = _warn(
+         "W1103",
+         Category.IMPORT,
+         "'{name}' is ambient and does not need to be imported from '{module}'"
+     ),
+     W1104 = _warn(
+         "W1104",
+         Category.IMPORT,
+         "Use the lowercase 'any' keyword instead of importing 'Any' from typing"
+     ),
      # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
      # Semantic errors/warnings (E2xxx/W2xxx)
      # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

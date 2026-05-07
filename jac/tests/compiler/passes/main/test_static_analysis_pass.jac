@@ -163,6 +163,57 @@ test "ambient typing names resolve without import" {
     }
 }
 
+test "redundant typing imports warn on the import line" {
+    file_path = os.path.join(FIXTURES, "redundant_typing_imports.jac");
+    prog = JacProgram();
+    prog.compile(file_path, type_check=True);
+
+    w1103 = [
+        w
+        for w in prog.warnings_had
+        if w.code is not None and w.code.code == "W1103"
+    ];
+    w1104 = [
+        w
+        for w in prog.warnings_had
+        if w.code is not None and w.code.code == "W1104"
+    ];
+
+    # Three ambient names imported plain:
+    #   Callable, Mapping  -- from `typing` (typing re-exports the abc names)
+    #   Iterable           -- from `collections.abc` (canonical source)
+    # Aliased Callable (as Cb), non-ambient cast and TYPE_CHECKING must not warn.
+    assert len(w1103) == 3 , f"Expected 3 W1103 warnings (Callable, Mapping, Iterable), got: {[
+        str(w) for w in w1103
+    ]}";
+    w1103_msgs = [w.msg for w in w1103];
+    assert any("'Callable'" in m and "'typing'" in m for m in w1103_msgs) , f"Expected W1103 for Callable from typing, got: {w1103_msgs}";
+    assert any("'Mapping'" in m and "'typing'" in m for m in w1103_msgs) , f"Expected W1103 for Mapping from typing, got: {w1103_msgs}";
+    assert any("'Iterable'" in m and "'collections.abc'" in m for m in w1103_msgs) , f"Expected W1103 for Iterable from collections.abc (proves per-module registry), got: {w1103_msgs}";
+
+    # Any gets a distinct W1104 pointing at the lowercase 'any' builtin.
+    assert len(w1104) == 1 , f"Expected 1 W1104 warning for Any, got: {[
+        str(w) for w in w1104
+    ]}";
+    assert "any" in w1104[0].msg , f"Expected W1104 message to mention lowercase 'any', got: {w1104[
+        0
+    ].msg}";
+
+    # cast and TYPE_CHECKING are runtime, not ambient -- must not trip either warning.
+    runtime_only_warns = [
+        w
+        for w in (w1103 + w1104)
+        if "'cast'" in w.msg or "'TYPE_CHECKING'" in w.msg
+    ];
+    assert len(runtime_only_warns) == 0 , f"runtime-only typing names should not warn, got: {[
+        str(w) for w in runtime_only_warns
+    ]}";
+
+    # No errors should be produced.
+    error_msgs = [str(e) for e in prog.errors_had];
+    assert len(error_msgs) == 0 , f"Expected no errors, got: {error_msgs}";
+}
+
 test "obj bare assignment to has var name still warns as unused" {
     file_path = os.path.join(FIXTURES, "obj_bare_has_assign.jac");
     prog = JacProgram();

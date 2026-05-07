@@ -3391,20 +3391,58 @@ impl TypeEvaluator.postinit -> None {
         }
     }
     # Merge curated typing constructs into builtins. The set of names is
-    # owned by typing_ambient.pyi's __all__ — that file is the single source
-    # of truth for both the type checker (this merge) and PyastGenPass
-    # (which auto-emits `from typing import <names>` when references appear).
-    typing_ambient_allowed = read_dunder_all(self._TYPING_AMBIENT_STUB_FILE_PATH);
-    if typing_ambient_allowed is not None {
-        for typing_name in typing_ambient_allowed {
-            typing_sym = self.typing_module.names_in_scope.get(typing_name);
-            if typing_sym is None {
-                continue;
+    # owned by typing_ambient.pyi's __all__ -- that file is the single source
+    # of truth for both the type checker (this merge), PyastGenPass
+    # (auto-emits `from typing import <names>` when references appear), and
+    # the redundant-import lint (W1103/W1104). The stub itself groups names
+    # by their real source module via two `from <module> import (...)`
+    # blocks; we preserve that grouping so the lint can flag a redundant
+    # `from collections.abc import Callable` only when 'Callable' is
+    # actually re-exported from collections.abc, not by coincidence.
+    def read_ambient_imports_by_module(path: str) -> dict[str, set[str]] {
+        out: dict[str, set[str]] = {};
+        try {
+            allowed = read_dunder_all(path);
+            if allowed is None {
+                return out;
             }
-            existing_typing = self.builtins_module.names_in_scope.get(typing_name);
-            if existing_typing is None or existing_typing.imported {
-                self.builtins_module.names_in_scope[typing_name] = typing_sym;
+            py_tree = py_ast.parse(read_file_with_encoding(path));
+            for node in py_tree.body {
+                if (isinstance(node, py_ast.ImportFrom) and node.module is not None) {
+                    public = {
+                        (alias.asname or alias.name) for alias in node.names
+                    } & allowed;
+                    if public {
+                        out[node.module] = out.get(node.module, set()) | public;
+                    }
+                }
             }
+        } except Exception {
+            return {};
+        }
+        return out;
+    }
+    raw_groups = read_ambient_imports_by_module(self._TYPING_AMBIENT_STUB_FILE_PATH);
+    typing_ambient_flat: set[str] = set();
+    for names in raw_groups.values() {
+        typing_ambient_flat = typing_ambient_flat | names;
+    }
+    # Each ambient name is *also* available via `typing` (typing re-exports
+    # everything in collections.abc that we expose). So for the redundant-
+    # import lint, importing any ambient name from `typing` is redundant --
+    # not just the names whose canonical source is `typing`. Override the
+    # `typing` entry with the full union so the lint flags both
+    # `from typing import Callable` and `from collections.abc import Callable`.
+    self.ambient_typing_names_by_module = raw_groups;
+    self.ambient_typing_names_by_module["typing"] = typing_ambient_flat;
+    for typing_name in typing_ambient_flat {
+        typing_sym = self.typing_module.names_in_scope.get(typing_name);
+        if typing_sym is None {
+            continue;
+        }
+        existing_typing = self.builtins_module.names_in_scope.get(typing_name);
+        if existing_typing is None or existing_typing.imported {
+            self.builtins_module.names_in_scope[typing_name] = typing_sym;
         }
     }
     self._prefetch_types();
