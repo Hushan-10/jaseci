@@ -175,6 +175,12 @@ obj SpawnCallParts {
         target: SpawnTargetInfo;
 }
 
+"""Resolved function-call argument slot."""
+obj CallArgSlot {
+    has name: (str | None),
+        value: (es.Expression | es.SpreadElement | None);
+}
+
 """Jac to ECMAScript AST transpilation pass."""
 obj EsastGenPass(BaseAstGenPass[es.Statement]) {
     def before_pass -> None;
@@ -299,6 +305,36 @@ obj EsastGenPass(BaseAstGenPass[es.Statement]) {
     def _collect_pattern_names(target: uni.UniNode) -> list[tuple[(str, uni.Name)]];
     def _is_name_first_definition(name_node: uni.Name) -> bool;
     def exit_assignment(nd: uni.Assignment) -> None;
+    def _resolve_source_module(nd: uni.Import) -> (uni.Module | None);
+    def _ability_from_symbol(sym: (uni.Symbol | None)) -> (uni.Ability | None);
+    def _resolve_sv_import_ability(name: str) -> (uni.Ability | None);
+    def _resolve_call_ability(nd: uni.FuncCall) -> (uni.Ability | None);
+    def _param_names_from_ability(ability_node: uni.Ability) -> list[str];
+    def _resolve_call_arg_slots(
+        nd: uni.FuncCall,
+        args: list[(es.Expression | es.SpreadElement)],
+        props: list[(es.Property | es.SpreadElement)],
+        param_names: list[str],
+        func_name: str,
+        spread_read_source: (es.Expression | None)
+    ) -> list[CallArgSlot];
+
+    def _call_args_from_slots(
+        slots: list[CallArgSlot]
+    ) -> (list[(es.Expression | es.SpreadElement)] | None);
+
+    def _kwargs_spread_arg(
+        props: list[(es.Property | es.SpreadElement)], nd: uni.FuncCall
+    ) -> (es.Expression | None);
+
+    def _kwargs_spread_needs_temp(
+        props: list[(es.Property | es.SpreadElement)]
+    ) -> bool;
+
+    def _wrap_with_kwargs_temp(
+        expr: es.Expression, spread_arg: es.Expression, nd: uni.FuncCall
+    ) -> es.Expression;
+
     def exit_func_call(nd: uni.FuncCall) -> None;
     def exit_index_slice(nd: uni.IndexSlice) -> None;
     def exit_special_var_ref(nd: uni.SpecialVarRef) -> None;

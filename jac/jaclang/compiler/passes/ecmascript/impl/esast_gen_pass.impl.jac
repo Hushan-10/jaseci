@@ -913,6 +913,321 @@ impl EsastGenPass.exit_index_slice(nd: uni.IndexSlice) -> None {
     }
 }
 
+"""Resolve an import's source module in both production and type-check paths."""
+impl EsastGenPass._resolve_source_module(nd: uni.Import) -> (uni.Module | None) {
+    if not nd.from_loc {
+        return None;
+    }
+    import from pathlib { Path }
+    resolved_path = nd.from_loc.resolve_relative_path();
+    abs_path = str(Path(resolved_path).resolve());
+    source_mod = self.prog.mod.hub.get(resolved_path)
+    or self.prog.mod.hub.get(abs_path);
+    if source_mod {
+        return source_mod;
+    }
+    if Path(resolved_path).exists() {
+        source_mod = self.prog.compile(
+            resolved_path, no_cgen=True, type_check=False, symtab_ir_only=True
+        );
+        self.prog.mod.hub[abs_path] = source_mod;
+        return source_mod;
+    }
+    return None;
+}
+
+"""Return the ability node represented by a symbol definition."""
+impl EsastGenPass._ability_from_symbol(
+    sym: (uni.Symbol | None)
+) -> (uni.Ability | None) {
+    if not sym or not sym.defn {
+        return None;
+    }
+    defn_node = sym.defn[0];
+    if isinstance(defn_node, uni.Ability) {
+        return defn_node;
+    }
+    if defn_node.parent and isinstance(defn_node.parent, uni.Ability) {
+        return defn_node.parent;
+    }
+    return None;
+}
+
+"""Resolve an sv-imported function to its source ability."""
+impl EsastGenPass._resolve_sv_import_ability(name: str) -> (uni.Ability | None) {
+    for imp in self.get_main_mod().get_all_sub_nodes(uni.Import) {
+        if imp.code_context == CodeContext.CLIENT
+        or not imp.from_loc
+        or not imp.items
+        or imp._source_context_token() is None
+        or imp._source_context_token().name != Tok.KW_SERVER {
+            continue;
+        }
+        for item in imp.items {
+            if not isinstance(item, uni.ModuleItem)
+            or not isinstance(item.name, uni.Name) {
+                continue;
+            }
+            local_name = item.alias.sym_name if item.alias else item.name.sym_name;
+            if local_name != name {
+                continue;
+            }
+            source_mod = self._resolve_source_module(imp);
+            if not source_mod {
+                return None;
+            }
+            return self._ability_from_symbol(source_mod.lookup(item.name.sym_name));
+        }
+    }
+    return None;
+}
+
+"""Resolve the statically known ability targeted by a function call."""
+impl EsastGenPass._resolve_call_ability(nd: uni.FuncCall) -> (uni.Ability | None) {
+    if isinstance(nd.target, uni.Name) {
+        target_sym = nd.target.sym;
+        if not target_sym and nd.target.sym_tab {
+            target_sym = nd.target.sym_tab.lookup(nd.target.sym_name, deep=True);
+        }
+        ability_node = self._ability_from_symbol(target_sym);
+        if ability_node {
+            return ability_node;
+        }
+        return self._resolve_sv_import_ability(nd.target.sym_name);
+    }
+    if isinstance(nd.target, uni.AtomTrailer)
+    and isinstance(nd.target.right, uni.Name) {
+        target_sym = nd.target.right.sym;
+        if not target_sym {
+            try {
+                _te = self.prog.get_type_evaluator();
+                if _te {
+                    _te.get_type_of_expression(nd.target);
+                    target_sym = nd.target.right.sym;
+                }
+            } except Exception {
+                target_sym = None;
+            }
+        }
+        return self._ability_from_symbol(target_sym);
+    }
+    return None;
+}
+
+"""Extract normal positional parameter names from an ability."""
+impl EsastGenPass._param_names_from_ability(ability_node: uni.Ability) -> list[str] {
+    if not isinstance(ability_node.signature, uni.FuncSignature) {
+        return [];
+    }
+    sig = ability_node.signature;
+    names: list[str] = [];
+    for p in sig.posonly_params {
+        names.append(p.name.sym_name);
+    }
+    if sig.params {
+        for p in sig.params {
+            names.append(p.name.sym_name);
+        }
+    }
+    for p in sig.kwonlyargs {
+        names.append(p.name.sym_name);
+    }
+    return names;
+}
+
+"""Bind generated positional/keyword args to known parameter slots."""
+impl EsastGenPass._resolve_call_arg_slots(
+    nd: uni.FuncCall,
+    args: list[(es.Expression | es.SpreadElement)],
+    props: list[(es.Property | es.SpreadElement)],
+    param_names: list[str],
+    func_name: str,
+    spread_read_source: (es.Expression | None)
+) -> list[CallArgSlot] {
+    by_name: dict[str, (es.Expression | es.SpreadElement)] = {};
+    extras: list[CallArgSlot] = [];
+    spread_sources: list[es.Expression] = [];
+    seen_names: set[str] = set();
+    for (i, arg) in enumerate(args) {
+        if isinstance(arg, es.SpreadElement) {
+            extras.append(CallArgSlot(name=None, value=arg));
+            continue;
+        }
+        if i < len(param_names) {
+            pname = param_names[i];
+            seen_names.add(pname);
+            by_name[pname] = arg;
+        } else {
+            extras.append(CallArgSlot(name=None, value=arg));
+        }
+    }
+    for kw in props {
+        if isinstance(kw, es.SpreadElement) {
+            spread_sources.append(kw.argument);
+            continue;
+        }
+        kw_name = '';
+        if isinstance(kw.key, es.Identifier) {
+            kw_name = kw.key.name;
+        } elif isinstance(kw.key, es.Literal) {
+            kw_name = str(kw.key.value);
+        }
+        if not kw_name {
+            extras.append(
+                CallArgSlot(
+                    name=None,
+                    value=self.sync_loc(
+                        es.SpreadElement(argument=kw.value), jac_node=nd
+                    )
+                )
+            );
+            continue;
+        }
+        if kw_name in seen_names {
+            self.emit(E5080, node_override=nd, name=kw_name, func=func_name);
+        }
+        seen_names.add(kw_name);
+        by_name[kw_name] = kw.value;
+    }
+    resolved: list[CallArgSlot] = [];
+    for pname in param_names {
+        if pname in by_name {
+            resolved.append(CallArgSlot(name=pname, value=by_name[pname]));
+        } elif spread_sources {
+            spread_source = spread_read_source;
+            if spread_source is None {
+                spread_source = spread_sources[0]
+                    if len(spread_sources) == 1
+                    else self.sync_loc(
+                        es.ObjectExpression(
+                            properties=[
+                                self.sync_loc(
+                                    es.SpreadElement(argument=src), jac_node=nd
+                                ) for src in spread_sources
+                            ]
+                        ),
+                        jac_node=nd
+                    );
+            }
+            resolved.append(
+                CallArgSlot(
+                    name=pname,
+                    value=self.sync_loc(
+                        es.MemberExpression(
+                            object=spread_source,
+                            property=self.sync_loc(
+                                es.Literal(value=pname), jac_node=nd
+                            ),
+                            computed=True
+                        ),
+                        jac_node=nd
+                    )
+                )
+            );
+        } else {
+            resolved.append(CallArgSlot(name=pname, value=None));
+        }
+    }
+    resolved.extend(extras);
+    return resolved;
+}
+
+"""Convert resolved slots to a normal ordered JS argument list."""
+impl EsastGenPass._call_args_from_slots(
+    slots: list[CallArgSlot]
+) -> (list[(es.Expression | es.SpreadElement)] | None) {
+    call_args: list[(es.Expression | es.SpreadElement)] = [];
+    last_value_idx = -1;
+    for (i, slot) in enumerate(slots) {
+        if slot.value is not None {
+            last_value_idx = i;
+        }
+    }
+    if last_value_idx < 0 {
+        return [];
+    }
+    for (i, slot) in enumerate(slots) {
+        if i > last_value_idx {
+            break;
+        }
+        if slot.value is None {
+            call_args.append(es.Identifier(name='undefined'));
+            continue;
+        }
+        if slot.name is None {
+            call_args.append(slot.value);
+            continue;
+        }
+        call_args.append(slot.value);
+    }
+    return call_args;
+}
+
+"""Build the expression that supplies merged **kwargs values, if any."""
+impl EsastGenPass._kwargs_spread_arg(
+    props: list[(es.Property | es.SpreadElement)], nd: uni.FuncCall
+) -> (es.Expression | None) {
+    sources: list[es.Expression] = [];
+    for prop in props {
+        if isinstance(prop, es.SpreadElement) {
+            sources.append(prop.argument);
+        }
+    }
+    if not sources {
+        return None;
+    }
+    if len(sources) == 1 {
+        return sources[0];
+    }
+    return self.sync_loc(
+        es.ObjectExpression(
+            properties=[
+                self.sync_loc(es.SpreadElement(argument=src), jac_node=nd)
+                for src in sources
+            ]
+        ),
+        jac_node=nd
+    );
+}
+
+"""Return true when **kwargs needs a temp to preserve single evaluation."""
+impl EsastGenPass._kwargs_spread_needs_temp(
+    props: list[(es.Property | es.SpreadElement)]
+) -> bool {
+    sources: list[es.Expression] = [];
+    for prop in props {
+        if isinstance(prop, es.SpreadElement) {
+            sources.append(prop.argument);
+        }
+    }
+    if len(sources) > 1 {
+        return True;
+    }
+    if len(sources) == 1 and not isinstance(sources[0], es.Identifier) {
+        return True;
+    }
+    return False;
+}
+
+"""Wrap an expression in an IIFE that binds merged **kwargs once."""
+impl EsastGenPass._wrap_with_kwargs_temp(
+    expr: es.Expression, spread_arg: es.Expression, nd: uni.FuncCall
+) -> es.Expression {
+    temp_id = self.sync_loc(es.Identifier(name='__jac_kwargs'), jac_node=nd);
+    return self.sync_loc(
+        es.CallExpression(
+            callee=self.sync_loc(
+                es.ArrowFunctionExpression(
+                    params=[temp_id], body=expr, expression=True, async_=False
+                ),
+                jac_node=nd
+            ),
+            arguments=[spread_arg]
+        ),
+        jac_node=nd
+    );
+}
+
 """Process function call."""
 impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
     import from jaclang.compiler.type_system { types as jtypes }
@@ -957,41 +1272,41 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
     }
     # Check for server function call from client context - transform to __jacCallFunction
     if (nd.in_client_context() and isinstance(nd.target, uni.Name)) {
-        # Symbol may not be linked yet, so look it up directly from the symbol table
-        target_sym = nd.target.sym;
-        if not target_sym and nd.target.sym_tab {
-            target_sym = nd.target.sym_tab.lookup(nd.target.sym_name, deep=True);
-        }
-        if (target_sym and target_sym.defn) {
-            defn_node = target_sym.defn[0];
-            if isinstance(defn_node.parent, uni.Ability) {
-                ability_node = defn_node.parent;
-                # A function is a server function if:
-                # 1. It has code_context = SERVER (or default), AND
-                # 2. It is NOT inside a client context (not nested in cl{}), AND
-                # 3. It is a PUBLIC function (def:pub) - this excludes builtins like print
-                is_server_func = (
-                    ability_node.code_context != CodeContext.CLIENT
-                    and not ability_node.in_client_context()
-                    and ability_node.access is not None
-                    and ability_node.access.tag.name == Tok.KW_PUB
-                );
-                if is_server_func {
-                    func_name = nd.target.sym_name;
-                    # Analyze function body for auto-caching effects
-                    effect_key = f"func:{func_name}";
-                    if effect_key not in self.client_manifest.endpoint_effects {
-                        if ability_node.body and isinstance(ability_node.body, list) {
-                            effects = self._analyze_body_effects(ability_node.body);
-                            self.client_manifest.endpoint_effects[effect_key] = effects;
+        ability_node = self._resolve_call_ability(nd);
+        if ability_node {
+            # A function is a server function if:
+            # 1. It has code_context = SERVER (or default), AND
+            # 2. It is NOT inside a client context (not nested in cl{}), AND
+            # 3. It is a PUBLIC function (def:pub) - this excludes builtins like print
+            is_server_func = (
+                ability_node.code_context != CodeContext.CLIENT
+                and not ability_node.in_client_context()
+                and ability_node.access is not None
+                and ability_node.access.tag.name == Tok.KW_PUB
+            );
+            if is_server_func {
+                func_name = nd.target.sym_name;
+                # Analyze function body for auto-caching effects
+                effect_key = f"func:{func_name}";
+                if effect_key not in self.client_manifest.endpoint_effects {
+                    if ability_node.body and isinstance(ability_node.body, list) {
+                        effects = self._analyze_body_effects(ability_node.body);
+                        self.client_manifest.endpoint_effects[effect_key] = effects;
+                    }
+                }
+                param_names: list[str] = self._param_names_from_ability(ability_node);
+                inline_param_type_map: dict[str, str] = {};
+                inline_ret_type: str = '';
+                if isinstance(ability_node.signature, uni.FuncSignature) {
+                    sig = ability_node.signature;
+                    for p in sig.posonly_params {
+                        if p.type_tag
+                        and p.type_tag.tag
+                        and isinstance(p.type_tag.tag, uni.Name) {
+                            inline_param_type_map[p.name.sym_name] = p.type_tag.tag.value;
                         }
                     }
-                    param_names: list[str] = [];
-                    inline_param_type_map: dict[str, str] = {};
-                    inline_ret_type: str = '';
-                    if isinstance(ability_node.signature, uni.FuncSignature) {
-                        sig = ability_node.signature;
-                        param_names = [p.name.sym_name for p in sig.params];
+                    if sig.params {
                         for p in sig.params {
                             if p.type_tag
                             and p.type_tag.tag
@@ -999,287 +1314,239 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
                                 inline_param_type_map[p.name.sym_name] = p.type_tag.tag.value;
                             }
                         }
-                        if sig.return_type {
-                            if isinstance(sig.return_type, uni.Name) {
-                                inline_ret_type = sig.return_type.value;
+                    }
+                    for p in sig.kwonlyargs {
+                        if p.type_tag
+                        and p.type_tag.tag
+                        and isinstance(p.type_tag.tag, uni.Name) {
+                            inline_param_type_map[p.name.sym_name] = p.type_tag.tag.value;
+                        }
+                    }
+                    if sig.return_type {
+                        if isinstance(sig.return_type, uni.Name) {
+                            inline_ret_type = sig.return_type.value;
+                        }
+                    }
+                    # Use interop manifest for accurate return type (handles dict, list, etc.)
+                    if self.ir_in.gen.interop_manifest and not inline_ret_type {
+                        for b in self.ir_in.gen.interop_manifest.server_exports_to_client {
+                            if b.name == func_name {
+                                inline_ret_type = b.ret_type;
+                                break;
                             }
                         }
-                        # Use interop manifest for accurate return type (handles dict, list, etc.)
-                        if self.ir_in.gen.interop_manifest and not inline_ret_type {
-                            for b in self.ir_in.gen.interop_manifest.server_exports_to_client {
-                                if b.name == func_name {
-                                    inline_ret_type = b.ret_type;
-                                    break;
-                                }
-                            }
-                        }
                     }
-                    inline_boundary = self.ir_in.gen.interop_manifest.boundary_types
-                        if self.ir_in.gen.interop_manifest
-                        else {};
-                    # ─── Unified call-site argument resolution ─────────────
-                    # Map every call-site argument — positional and kwarg —
-                    # onto the server function's parameter list, producing a
-                    # single ordered ``(name, expr)`` list that drives one
-                    # emission loop below.  This collapses what used to be
-                    # two parallel rebuild passes (issue #5852) and lets us
-                    # detect duplicate-argument collisions cleanly.
-                    #
-                    # Slot semantics:
-                    #   * (name, expr)  — named param; ``__to_wire()`` may
-                    #                      wrap ``expr`` in the emit loop.
-                    #   * (None, spread) — ``*lst`` or ``**d`` spread that
-                    #                       must be preserved in source order
-                    #                       and passed through verbatim.
-                    kwarg_props_unresolved = props;
-                    resolved:
-                        list[tuple[(str | None), (es.Expression | es.SpreadElement)]] = [];
-                    seen_names: set[str] = set();
-                    for (i, arg) in enumerate(args) {
-                        if isinstance(arg, es.SpreadElement) {
-                            resolved.append((None, arg));
-                            continue;
-                        }
-                        if i < len(param_names) {
-                            seen_names.add(param_names[i]);
-                            resolved.append((param_names[i], arg));
-                        }
-                        # Excess positional args are silently dropped here;
-                        # arity is validated by the type-checker pass.
+                }
+                inline_boundary = self.ir_in.gen.interop_manifest.boundary_types
+                    if self.ir_in.gen.interop_manifest
+                    else {};
+                spread_arg = self._kwargs_spread_arg(props, nd);
+                use_kwargs_temp = (
+                    spread_arg is not None and self._kwargs_spread_needs_temp(props)
+                );
+                spread_read_source = self.sync_loc(
+                    es.Identifier(name='__jac_kwargs'), jac_node=nd
+                )
+                    if use_kwargs_temp
+                    else None;
+                slots = self._resolve_call_arg_slots(
+                    nd, args, props, param_names, func_name, spread_read_source
+                );
+                rpc_props: list[(es.Property | es.SpreadElement)] = [];
+                for slot in slots {
+                    if slot.value is None {
+                        continue;
                     }
-                    for kw in kwarg_props_unresolved {
-                        if isinstance(kw, es.SpreadElement) {
-                            resolved.append((None, kw));
-                            continue;
-                        }
-                        kw_name = '';
-                        if isinstance(kw.key, es.Identifier) {
-                            kw_name = kw.key.name;
-                        } elif isinstance(kw.key, es.Literal) {
-                            kw_name = str(kw.key.value);
-                        }
-                        if not kw_name {
-                            # Defensive: unrecognised key shape — preserve
-                            # the value as a spread rather than drop it.
-                            resolved.append(
-                                (
-                                    None,
-                                    self.sync_loc(
-                                        es.SpreadElement(argument=kw.value), jac_node=nd
-                                    )
-                                )
-                            );
-                            continue;
-                        }
-                        if kw_name in seen_names {
-                            self.emit(
-                                E5080, node_override=nd, name=kw_name, func=func_name
-                            );
-                            # Last-write-wins so the emitted JS is at least
-                            # internally consistent; the diagnostic stops
-                            # the build at ``jac check`` time.
-                        }
-                        seen_names.add(kw_name);
-                        resolved.append((kw_name, kw.value));
+                    if slot.name is None {
+                        rpc_props.append(slot.value);
+                        continue;
                     }
-
-                    # ─── Single emission loop ──────────────────────────────
-                    # Apply boundary ``__to_wire()`` wrapping where required
-                    # and build the ObjectExpression that becomes the second
-                    # argument to ``__jacCallFunction``.
-                    props = [];
-                    for (slot_name, slot_expr) in resolved {
-                        if slot_name is None {
-                            props.append(slot_expr);
-                            continue;
-                        }
-                        named_value = cast(es.Expression, slot_expr);
-                        ptype = inline_param_type_map.get(slot_name, '');
-                        if ptype in inline_boundary
-                        and inline_boundary[ptype].kind != "enum" {
-                            named_value = self.sync_loc(
-                                es.CallExpression(
-                                    callee=es.MemberExpression(
-                                        object=named_value,
-                                        property=es.Identifier(name='__to_wire'),
-                                        computed=False
-                                    ),
-                                    arguments=[]
-                                ),
-                                jac_node=nd
-                            );
-                        }
-                        props.append(
-                            self.sync_loc(
-                                es.Property(
-                                    key=self.sync_loc(
-                                        es.Literal(value=slot_name), jac_node=nd
-                                    ),
-                                    value=named_value,
-                                    kind='init',
-                                    method=False,
-                                    shorthand=False,
+                    named_value = cast(es.Expression, slot.value);
+                    ptype = inline_param_type_map.get(slot.name, '');
+                    if ptype in inline_boundary
+                    and inline_boundary[ptype].kind != "enum" {
+                        named_value = self.sync_loc(
+                            es.CallExpression(
+                                callee=es.MemberExpression(
+                                    object=named_value,
+                                    property=es.Identifier(name='__to_wire'),
                                     computed=False
                                 ),
-                                jac_node=nd
-                            )
+                                arguments=[]
+                            ),
+                            jac_node=nd
                         );
                     }
-                    args_obj = self.sync_loc(
-                        es.ObjectExpression(properties=props), jac_node=nd
-                    );
-                    # Generate CallExpression without await - the outer AwaitExpr handles that
-                    result_expr: es.Expression = self.sync_loc(
-                        es.CallExpression(
-                            callee=self.sync_loc(
-                                es.Identifier(name='__jacCallFunction'), jac_node=nd
+                    rpc_props.append(
+                        self.sync_loc(
+                            es.Property(
+                                key=self.sync_loc(
+                                    es.Literal(value=slot.name), jac_node=nd
+                                ),
+                                value=named_value,
+                                kind='init',
+                                method=False,
+                                shorthand=False,
+                                computed=False
                             ),
-                            arguments=[
-                                self.sync_loc(es.Literal(value=func_name), jac_node=nd),
-                                args_obj
-                            ]
+                            jac_node=nd
+                        )
+                    );
+                }
+                args_obj: es.Expression = self.sync_loc(
+                    es.ObjectExpression(properties=rpc_props), jac_node=nd
+                );
+                if use_kwargs_temp and spread_arg is not None {
+                    args_obj = self._wrap_with_kwargs_temp(args_obj, spread_arg, nd);
+                }
+                # Generate CallExpression without await - the outer AwaitExpr handles that
+                result_expr: es.Expression = self.sync_loc(
+                    es.CallExpression(
+                        callee=self.sync_loc(
+                            es.Identifier(name='__jacCallFunction'), jac_node=nd
+                        ),
+                        arguments=[
+                            self.sync_loc(es.Literal(value=func_name), jac_node=nd),
+                            args_obj
+                        ]
+                    ),
+                    jac_node=nd
+                );
+                # Wrap return with __from_wire if return type is a boundary type.
+                # We must await the call BEFORE wrapping with __from_wire
+                # so __from_wire receives the resolved value, not a Promise.
+                if inline_ret_type in inline_boundary
+                and inline_boundary[inline_ret_type].kind != "enum" {
+                    result_expr = self.sync_loc(
+                        es.AwaitExpression(argument=result_expr), jac_node=nd
+                    );
+                    result_expr = self.sync_loc(
+                        es.CallExpression(
+                            callee=es.MemberExpression(
+                                object=es.Identifier(name=inline_ret_type),
+                                property=es.Identifier(name='__from_wire'),
+                                computed=False
+                            ),
+                            arguments=[result_expr]
                         ),
                         jac_node=nd
                     );
-                    # Wrap return with __from_wire if return type is a boundary type.
-                    # We must await the call BEFORE wrapping with __from_wire
-                    # so __from_wire receives the resolved value, not a Promise.
-                    if inline_ret_type in inline_boundary
-                    and inline_boundary[inline_ret_type].kind != "enum" {
+                } elif inline_ret_type.startswith("list[")
+                and inline_ret_type.endswith("]") {
+                    inner = inline_ret_type[5:-1];
+                    if inner in inline_boundary
+                    and inline_boundary[inner].kind != "enum" {
+                        # Wrap in AwaitExpression BEFORE chaining .map()
+                        # so the resolved array (not the Promise) gets mapped.
+                        # The outer exit_await_expr will see this is already
+                        # awaited and produce (await call()).map(...).
                         result_expr = self.sync_loc(
                             es.AwaitExpression(argument=result_expr), jac_node=nd
                         );
                         result_expr = self.sync_loc(
                             es.CallExpression(
                                 callee=es.MemberExpression(
-                                    object=es.Identifier(name=inline_ret_type),
-                                    property=es.Identifier(name='__from_wire'),
+                                    object=result_expr,
+                                    property=es.Identifier(name='map'),
                                     computed=False
                                 ),
-                                arguments=[result_expr]
+                                arguments=[
+                                    es.ArrowFunctionExpression(
+                                        params=[es.Identifier(name='x')],
+                                        body=es.CallExpression(
+                                            callee=es.MemberExpression(
+                                                object=es.Identifier(name=inner),
+                                                property=es.Identifier(
+                                                    name='__from_wire'
+                                                ),
+                                                computed=False
+                                            ),
+                                            arguments=[es.Identifier(name='x')]
+                                        ),
+                                        expression=True,
+                                        async_=False
+                                    )
+                                ]
                             ),
                             jac_node=nd
                         );
-                    } elif inline_ret_type.startswith("list[")
-                    and inline_ret_type.endswith("]") {
-                        inner = inline_ret_type[5:-1];
-                        if inner in inline_boundary
-                        and inline_boundary[inner].kind != "enum" {
-                            # Wrap in AwaitExpression BEFORE chaining .map()
-                            # so the resolved array (not the Promise) gets mapped.
-                            # The outer exit_await_expr will see this is already
-                            # awaited and produce (await call()).map(...).
+                    }
+                } elif inline_ret_type.startswith("dict[")
+                and inline_ret_type.endswith("]") {
+                    dict_params = inline_ret_type[5:-1];
+                    comma_pos = dict_params.find(', ');
+                    if comma_pos >= 0 {
+                        val_type = dict_params[comma_pos + 2:].strip();
+                        if val_type in inline_boundary
+                        and inline_boundary[val_type].kind != "enum" {
+                            # Await before dict hydration
                             result_expr = self.sync_loc(
                                 es.AwaitExpression(argument=result_expr), jac_node=nd
+                            );
+                            entries_call = es.CallExpression(
+                                callee=es.MemberExpression(
+                                    object=es.Identifier(name='Object'),
+                                    property=es.Identifier(name='entries'),
+                                    computed=False
+                                ),
+                                arguments=[result_expr]
+                            );
+                            map_call = es.CallExpression(
+                                callee=es.MemberExpression(
+                                    object=entries_call,
+                                    property=es.Identifier(name='map'),
+                                    computed=False
+                                ),
+                                arguments=[
+                                    es.ArrowFunctionExpression(
+                                        params=[
+                                            es.ArrayPattern(
+                                                elements=[
+                                                    es.Identifier(name='k'),
+                                                    es.Identifier(name='v')
+                                                ]
+                                            )
+                                        ],
+                                        body=es.ArrayExpression(
+                                            elements=[
+                                                es.Identifier(name='k'),
+                                                es.CallExpression(
+                                                    callee=es.MemberExpression(
+                                                        object=es.Identifier(
+                                                            name=val_type
+                                                        ),
+                                                        property=es.Identifier(
+                                                            name='__from_wire'
+                                                        ),
+                                                        computed=False
+                                                    ),
+                                                    arguments=[es.Identifier(name='v')]
+                                                )
+                                            ]
+                                        ),
+                                        expression=True,
+                                        async_=False
+                                    )
+                                ]
                             );
                             result_expr = self.sync_loc(
                                 es.CallExpression(
                                     callee=es.MemberExpression(
-                                        object=result_expr,
-                                        property=es.Identifier(name='map'),
+                                        object=es.Identifier(name='Object'),
+                                        property=es.Identifier(name='fromEntries'),
                                         computed=False
                                     ),
-                                    arguments=[
-                                        es.ArrowFunctionExpression(
-                                            params=[es.Identifier(name='x')],
-                                            body=es.CallExpression(
-                                                callee=es.MemberExpression(
-                                                    object=es.Identifier(name=inner),
-                                                    property=es.Identifier(
-                                                        name='__from_wire'
-                                                    ),
-                                                    computed=False
-                                                ),
-                                                arguments=[es.Identifier(name='x')]
-                                            ),
-                                            expression=True,
-                                            async_=False
-                                        )
-                                    ]
+                                    arguments=[map_call]
                                 ),
                                 jac_node=nd
                             );
                         }
-                    } elif inline_ret_type.startswith("dict[")
-                    and inline_ret_type.endswith("]") {
-                        dict_params = inline_ret_type[5:-1];
-                        comma_pos = dict_params.find(', ');
-                        if comma_pos >= 0 {
-                            val_type = dict_params[comma_pos + 2:].strip();
-                            if val_type in inline_boundary
-                            and inline_boundary[val_type].kind != "enum" {
-                                # Await before dict hydration
-                                result_expr = self.sync_loc(
-                                    es.AwaitExpression(argument=result_expr),
-                                    jac_node=nd
-                                );
-                                entries_call = es.CallExpression(
-                                    callee=es.MemberExpression(
-                                        object=es.Identifier(name='Object'),
-                                        property=es.Identifier(name='entries'),
-                                        computed=False
-                                    ),
-                                    arguments=[result_expr]
-                                );
-                                map_call = es.CallExpression(
-                                    callee=es.MemberExpression(
-                                        object=entries_call,
-                                        property=es.Identifier(name='map'),
-                                        computed=False
-                                    ),
-                                    arguments=[
-                                        es.ArrowFunctionExpression(
-                                            params=[
-                                                es.ArrayPattern(
-                                                    elements=[
-                                                        es.Identifier(name='k'),
-                                                        es.Identifier(name='v')
-                                                    ]
-                                                )
-                                            ],
-                                            body=es.ArrayExpression(
-                                                elements=[
-                                                    es.Identifier(name='k'),
-                                                    es.CallExpression(
-                                                        callee=es.MemberExpression(
-                                                            object=es.Identifier(
-                                                                name=val_type
-                                                            ),
-                                                            property=es.Identifier(
-                                                                name='__from_wire'
-                                                            ),
-                                                            computed=False
-                                                        ),
-                                                        arguments=[
-                                                            es.Identifier(name='v')
-                                                        ]
-                                                    )
-                                                ]
-                                            ),
-                                            expression=True,
-                                            async_=False
-                                        )
-                                    ]
-                                );
-                                result_expr = self.sync_loc(
-                                    es.CallExpression(
-                                        callee=es.MemberExpression(
-                                            object=es.Identifier(name='Object'),
-                                            property=es.Identifier(name='fromEntries'),
-                                            computed=False
-                                        ),
-                                        arguments=[map_call]
-                                    ),
-                                    jac_node=nd
-                                );
-                            }
-                        }
                     }
-                    # Auto-inject __jacCallFunction import if not already done
-                    self._inject_runtime_import('__jacCallFunction', nd);
-                    nd.gen.es_ast = result_expr;
-                    return;
                 }
+                # Auto-inject __jacCallFunction import if not already done
+                self._inject_runtime_import('__jacCallFunction', nd);
+                nd.gen.es_ast = result_expr;
+                return;
             }
         }
     }
@@ -1415,20 +1682,47 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
     }
     args_obj = self.sync_loc(es.ObjectExpression(properties=props), jac_node=nd);
     callee_expr = cast(es.Expression, callee);
-    call_args: list[(es.Expression | es.SpreadElement)] = [args_obj] if props else args;
+    call_args: list[(es.Expression | es.SpreadElement)] = args;
+    spread_arg = self._kwargs_spread_arg(props, nd);
+    use_kwargs_temp = spread_arg is not None and self._kwargs_spread_needs_temp(props);
+    spread_read_source = self.sync_loc(es.Identifier(name='__jac_kwargs'), jac_node=nd)
+        if use_kwargs_temp
+        else None;
+    if props {
+        ability_node = self._resolve_call_ability(nd);
+        if ability_node {
+            ordered_args = self._call_args_from_slots(
+                self._resolve_call_arg_slots(
+                    nd,
+                    args,
+                    props,
+                    self._param_names_from_ability(ability_node),
+                    nd.target.sym_name if isinstance(nd.target, uni.Name) else "func",
+                    spread_read_source
+                )
+            );
+            call_args = ordered_args if ordered_args is not None else [args_obj];
+        } else {
+            call_args = [args_obj];
+        }
+    }
     if (
         isinstance(callee_type, jtypes.ClassType)
         and callee_type.is_instantiable()
         and isinstance(callee, es.Expression)
     ) {
-        nd.gen.es_ast = self.sync_loc(
+        result_expr: es.Expression = self.sync_loc(
             es.NewExpression(callee=callee_expr, arguments=call_args), jac_node=nd
         );
     } else {
-        nd.gen.es_ast = self.sync_loc(
+        result_expr = self.sync_loc(
             es.CallExpression(callee=callee_expr, arguments=call_args), jac_node=nd
         );
     }
+    if use_kwargs_temp and spread_arg is not None {
+        result_expr = self._wrap_with_kwargs_temp(result_expr, spread_arg, nd);
+    }
+    nd.gen.es_ast = result_expr;
 }
 
 """Process assignment expression."""
@@ -2828,7 +3122,16 @@ impl EsastGenPass.exit_arch_has(nd: uni.ArchHas) -> None {
 impl EsastGenPass.exit_param_var(nd: uni.ParamVar) -> None {
     param_id = self.sync_loc(es.Identifier(name=nd.name.sym_name), jac_node=nd.name);
     self._register_declaration(param_id.name);
-    nd.gen.es_ast = param_id;
+    if nd.value and nd.value.gen.es_ast {
+        nd.gen.es_ast = self.sync_loc(
+            es.AssignmentPattern(
+                left=param_id, right=cast(es.Expression, nd.value.gen.es_ast)
+            ),
+            jac_node=nd
+        );
+    } else {
+        nd.gen.es_ast = param_id;
+    }
 }
 
 """Process function signature."""
@@ -2887,12 +3190,17 @@ impl EsastGenPass.exit_ability(nd: uni.Ability) -> None {
         ) {
             params.append(es.Identifier(name="props"));
             for param in nd.signature.params {
+                param_key = self.sync_loc(
+                    es.Identifier(name=param.name.sym_name), jac_node=param.name
+                );
                 destructure_props.append(
                     self.sync_loc(
                         es.AssignmentProperty(
-                            key=cast(es.Expression, param.gen.es_ast),
+                            key=param_key,
                             value=cast(es.Pattern, param.gen.es_ast),
-                            shorthand=True,
+                            shorthand=not isinstance(
+                                param.gen.es_ast, es.AssignmentPattern
+                            ),
                         ),
                         jac_node=param,
                     )
@@ -3220,7 +3528,11 @@ impl EsastGenPass.exit_archetype(nd: uni.Archetype) -> None {
 """Process import statement."""
 impl EsastGenPass.exit_import(nd: uni.Import) -> None {
     # Server-side import (sv keyword) - generate stubs for def:pub functions
-    if nd.code_context != CodeContext.CLIENT {
+    if (
+        nd.code_context != CodeContext.CLIENT
+        and nd._source_context_token() is not None
+        and nd._source_context_token().name == Tok.KW_SERVER
+    ) {
         if (nd.from_loc and nd.items) {
             self._generate_sv_import_stubs(nd);
         }
@@ -3331,11 +3643,7 @@ stubs that call __jacCallFunction() to invoke the server over HTTP.
 """
 impl EsastGenPass._generate_sv_import_stubs(nd: uni.Import) -> None {
     # Resolve the source module to look up function signatures
-    source_mod: uni.Module | None = None;
-    if nd.from_loc {
-        resolved_path = nd.from_loc.resolve_relative_path();
-        source_mod = self.prog.mod.hub.get(resolved_path);
-    }
+    source_mod: uni.Module | None = self._resolve_source_module(nd);
     stubs: list[es.Statement] = [];
     for item in nd.items {
         if not isinstance(item, uni.ModuleItem)
@@ -4870,7 +5178,12 @@ impl EsastGenPass.exit_node(nd: uni.UniNode) -> None {
         and ((nd.parent is None) or isinstance(nd.parent, uni.Module))
     ) {
         # Allow sv imports to reach exit_import for __jacCallFunction stub generation
-        if not isinstance(nd, (uni.Import, uni.ServerBlock)) {
+        is_sv_import = (
+            isinstance(nd, uni.Import)
+            and nd._source_context_token() is not None
+            and nd._source_context_token().name == Tok.KW_SERVER
+        );
+        if not is_sv_import and not isinstance(nd, uni.ServerBlock) {
             return;
         }
     }
@@ -4895,8 +5208,12 @@ impl EsastGenPass.enter_node(nd: uni.UniNode) -> None {
     ) {
         # Don't prune sv imports or sv blocks - they need to reach
         # exit_import so we can generate __jacCallFunction stubs
-        is_sv_import = isinstance(nd, (uni.Import, uni.ServerBlock));
-        if not is_sv_import {
+        is_sv_import = (
+            isinstance(nd, uni.Import)
+            and nd._source_context_token() is not None
+            and nd._source_context_token().name == Tok.KW_SERVER
+        );
+        if not is_sv_import and not isinstance(nd, uni.ServerBlock) {
             self.prune();
             return;
         }
