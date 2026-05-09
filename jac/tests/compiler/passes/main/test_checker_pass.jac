@@ -954,6 +954,34 @@ test "spawn_validation" {
     )}:\n" + "\n---\n".join(e.pretty_print() for e in e1115);
 }
 
+test "ability_trigger_archetype" {
+    # Walker abilities must trigger on a node/edge/Root; node/edge
+    # abilities must trigger on a walker. Tuple and union triggers are
+    # validated element-wise. Untyped triggers (`with entry`) are valid.
+    # The fixture has 6 walker-side bad cases (E1116) and 5 node/edge
+    # bad cases (E1117); the good cases must produce neither diagnostic.
+    path = os.path.join(CHECKER_FIXTURES, "checker_ability_trigger_archetype.jac");
+    program = JacProgram();
+    mod = program.compile(path, options=NO_TC);
+    TypeCheckPass(ir_in=mod, prog=program);
+    e1116 = [
+        e
+        for e in program.errors_had
+        if e.code and e.code.code == "E1116"
+    ];
+    assert len(e1116) == 6 , f"Expected 6 E1116 (invalid walker trigger), got {len(
+        e1116
+    )}:\n" + "\n---\n".join(e.pretty_print() for e in e1116);
+    e1117 = [
+        e
+        for e in program.errors_had
+        if e.code and e.code.code == "E1117"
+    ];
+    assert len(e1117) == 5 , f"Expected 5 E1117 (invalid node/edge trigger), got {len(
+        e1117
+    )}:\n" + "\n---\n".join(e.pretty_print() for e in e1117);
+}
+
 test "root_type" {
     program = JacProgram();
     path = os.path.join(CHECKER_FIXTURES, "checker_root_type.jac");
