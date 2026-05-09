@@ -4030,7 +4030,11 @@ impl TypeEvaluator.classify_condition(condition: uni.Expr) -> ConditionInfo | No
     if callable_key := self._extract_callable_info(condition) {
         return ConditionInfo(kind=NarrowingKind.CALLABLE, key=callable_key,);
     }
-    # 3-4. x is None / x is not None
+    # 3-4. x is None / x is not None / x == None / x != None
+    # `==`/`!=` against `None` narrow identically to `is`/`is not None` —
+    # this matches Pyright/mypy/TypeScript and the W2058 lint already nudges
+    # users toward `is`/`is not`, so soundness must not depend on which form
+    # they use.
     if (
         isinstance(condition, uni.CompareExpr)
         and len(condition.ops) == 1
@@ -4040,9 +4044,9 @@ impl TypeEvaluator.classify_condition(condition: uni.Expr) -> ConditionInfo | No
         narrowing_key = self.create_key_for_reference(condition.left);
         if narrowing_key is not None {
             op_name = condition.ops[0].name;
-            if op_name == Tok.KW_IS {
+            if op_name == Tok.KW_IS or op_name == Tok.EE {
                 return ConditionInfo(kind=NarrowingKind.NONE_IS, key=narrowing_key);
-            } elif op_name == Tok.KW_ISN {
+            } elif op_name == Tok.KW_ISN or op_name == Tok.NE {
                 return ConditionInfo(kind=NarrowingKind.NONE_IS_NOT, key=narrowing_key);
             }
         }
