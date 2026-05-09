@@ -422,7 +422,9 @@ glob E0001 = _err("E0001", Category.SYNTAX, "Expected '{expected}', got '{got}'"
      ),
      E1093 = _err("E1093", Category.TYPE, "Cannot yield {actual}, expected {expected}"),
      E1094 = _err(
-         "E1094", Category.TYPE, "Visit target must be a node type, got {type}"
+         "E1094",
+         Category.TYPE,
+         "Visit target must be a node, edge, path, or collection thereof, got {type}"
      ),
      E1095 = _err(
          "E1095",

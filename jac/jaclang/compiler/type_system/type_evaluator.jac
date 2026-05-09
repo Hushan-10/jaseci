@@ -134,6 +134,7 @@ obj PrefetchedTypes {
         root_class: types.ClassType | None = None,
         node_class: types.ClassType | None = None,
         walker_class: types.ClassType | None = None,
+        path_class: types.ClassType | None = None,
         jsx_element_class: types.ClassType | None = None,
         # Intrinsic element prop types (from dom_types.pyi)
         html_common_props_class: types.ClassType | None = None,
