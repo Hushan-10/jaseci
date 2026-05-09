@@ -13,6 +13,52 @@ test "topology index config from toml" {
     assert cfg.run.topology_index is False;
 }
 
+test "JAC_TOPOLOGY_INDEX env var overrides toml" {
+    # Eval workflows want to flip the index on/off without editing jac.toml.
+    # JAC_TOPOLOGY_INDEX, when set, is authoritative; the config flag is the
+    # fallback. Truthy values: 1 / true / yes / on (case-insensitive).
+    import from jaclang.project.config { JacConfig, set_config }
+    import from jaclang.runtimelib.topo_utils { _is_enabled }
+
+    cfg_on = JacConfig();
+    cfg_on.run.topology_index = True;
+    cfg_off = JacConfig();
+    cfg_off.run.topology_index = False;
+
+    prev_env = os.environ.get("JAC_TOPOLOGY_INDEX");
+    try {
+        # No env → falls through to config.
+        if "JAC_TOPOLOGY_INDEX" in os.environ {
+            del os.environ["JAC_TOPOLOGY_INDEX"];
+        }
+        set_config(cfg_on);
+        assert _is_enabled();
+        set_config(cfg_off);
+        assert not _is_enabled();
+
+        # Env "off" overrides config=True.
+        set_config(cfg_on);
+        for off_val in ["0", "false", "FALSE", "off", "no", ""] {
+            os.environ["JAC_TOPOLOGY_INDEX"] = off_val;
+            assert not _is_enabled() , f"expected off for env={off_val!r}";
+        }
+
+        # Env "on" overrides config=False.
+        set_config(cfg_off);
+        for on_val in ["1", "true", "TRUE", "on", "yes", "On"] {
+            os.environ["JAC_TOPOLOGY_INDEX"] = on_val;
+            assert _is_enabled() , f"expected on for env={on_val!r}";
+        }
+    } finally {
+        if prev_env is None {
+            os.environ.pop("JAC_TOPOLOGY_INDEX", None);
+        } else {
+            os.environ["JAC_TOPOLOGY_INDEX"] = prev_env;
+        }
+        set_config(JacConfig());
+    }
+}
+
 test "l3 fetch counter" {
     import from jaclang.runtimelib.memory { SqliteMemory }
     import from jaclang.jac0core.archetype { Root }
