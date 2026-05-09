@@ -14,7 +14,9 @@ import from jaclang.jac0core.diagnostics {
     E1055,
     E1096,
     E1097,
-    E1098
+    E1098,
+    E1114,
+    E1115
 }
 
 with entry {
@@ -493,9 +495,81 @@ def get_type_of_binary_operation(
             return right_type;
         }
     }
-    # Spawn operator: node spawn Walker() returns the walker instance
+    # Spawn operator: `a spawn b` requires exactly one operand to be a
+    # walker instance (or list[Walker]); the other operand must be a node,
+    # edge, or collection thereof. Returns the walker side's type so that
+    # `(p spawn W()).reports` and `(W() spawn p).reports` are typed alike.
     if isinstance(expr.op, uni.Token) and expr.op.name == Tok.KW_SPAWN {
-        return right_type;
+        def is_walker_instance(t: jtypes.TypeBase) -> bool {
+            if isinstance(t, jtypes.ClassType)
+            and t.is_walker_type()
+            and t.is_instance() {
+                return True;
+            }
+            if isinstance(t, jtypes.UnionType) {
+                return all(is_walker_instance(m) for m in t.types);
+            }
+            # list[Walker] is also a valid walker side.
+            if isinstance(t, jtypes.ClassType)
+            and t.is_builtin()
+            and t.shared.class_name == "list" {
+                if t.private.type_args and len(t.private.type_args) > 0 {
+                    return is_walker_instance(t.private.type_args[0]);
+                }
+            }
+            return False;
+        }
+        def is_archetype_target(t: jtypes.TypeBase) -> bool {
+            if t.is_any_type() or isinstance(t, jtypes.UnknownType) {
+                return True;
+            }
+            if isinstance(t, jtypes.ClassType) {
+                if t.is_node_type() or t.is_edge_type() {
+                    return True;
+                }
+                if (
+                    t.is_builtin()
+                    and t.shared.class_name in ("list", "tuple", "set", "frozenset")
+                ) {
+                    if t.private.type_args and len(t.private.type_args) > 0 {
+                        return all(is_archetype_target(a) for a in t.private.type_args);
+                    }
+                    # Unparameterized collection — accept (matches connect/visit).
+                    return True;
+                }
+            }
+            if isinstance(t, jtypes.UnionType) {
+                return all(is_archetype_target(m) for m in t.types);
+            }
+            return False;
+        }
+        # Skip diagnostics when either side is Any/Unknown — not enough
+        # info to diagnose without false positives. This mirrors the
+        # connect/visit operand checks.
+        left_unknown = (
+            left_type.is_any_type() or isinstance(left_type, jtypes.UnknownType)
+        );
+        right_unknown = (
+            right_type.is_any_type() or isinstance(right_type, jtypes.UnknownType)
+        );
+        left_walker = is_walker_instance(left_type);
+        right_walker = is_walker_instance(right_type);
+        if not left_walker and not right_walker {
+            if not (left_unknown or right_unknown) {
+                evaluator.emit_diag(
+                    E1114, expr, left=str(left_type), right=str(right_type)
+                );
+            }
+            return right_type;
+        }
+        # Exactly one side is the walker; the other must be a valid target.
+        target_node = expr.right if left_walker else expr.left;
+        target_type = right_type if left_walker else left_type;
+        if not is_archetype_target(target_type) {
+            evaluator.emit_diag(E1115, target_node, type=str(target_type));
+        }
+        # Spawn returns the walker instance (left_type if left is the walker).
+        return left_type if left_walker else right_type;
     }
     #  walrus assignment
     if isinstance(expr.op, uni.Token) and expr.op.name == Tok.WALRUS_EQ {

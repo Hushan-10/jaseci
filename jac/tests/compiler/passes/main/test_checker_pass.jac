@@ -926,6 +926,34 @@ test "visit_collection_element_type" {
     );
 }
 
+test "spawn_validation" {
+    # `a spawn b` requires exactly one operand to be a walker; the other
+    # operand must be a node, edge, or collection thereof.
+    # The fixture has 4 cases where neither side is a walker (E1114) and
+    # 5 cases where the non-walker side is not a valid spawn target
+    # (E1115). The good cases must not emit either diagnostic.
+    path = os.path.join(CHECKER_FIXTURES, "checker_spawn_validation.jac");
+    program = JacProgram();
+    mod = program.compile(path, options=NO_TC);
+    TypeCheckPass(ir_in=mod, prog=program);
+    e1114 = [
+        e
+        for e in program.errors_had
+        if e.code and e.code.code == "E1114"
+    ];
+    assert len(e1114) == 4 , f"Expected 4 E1114 (no walker in spawn), got {len(
+        e1114
+    )}:\n" + "\n---\n".join(e.pretty_print() for e in e1114);
+    e1115 = [
+        e
+        for e in program.errors_had
+        if e.code and e.code.code == "E1115"
+    ];
+    assert len(e1115) == 5 , f"Expected 5 E1115 (invalid spawn target), got {len(
+        e1115
+    )}:\n" + "\n---\n".join(e.pretty_print() for e in e1115);
+}
+
 test "root_type" {
     program = JacProgram();
     path = os.path.join(CHECKER_FIXTURES, "checker_root_type.jac");

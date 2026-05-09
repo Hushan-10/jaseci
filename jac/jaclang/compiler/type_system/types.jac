@@ -261,6 +261,7 @@ Holds the private details of class type.
     def is_enum_class -> bool;
     def is_edge_type -> bool;
     def is_node_type -> bool;
+    def is_walker_type -> bool;
     # Check if this is a special form with the given alias name (like Pyright's isSpecialBuiltIn)
     def is_special_form(name: (str | None) = None) -> bool;
     # Literal type support (similar to Pyright's literalValue handling)

@@ -487,6 +487,17 @@ glob E0001 = _err("E0001", Category.SYNTAX, "Expected '{expected}', got '{got}'"
      E1113 = _err(
          "E1113", Category.TYPE, "Cannot report \"{actual}\", expected \"{expected}\""
      ),
+     # Spawn operator errors
+     E1114 = _err(
+         "E1114",
+         Category.TYPE,
+         "Spawn operator requires a walker instance on one side, got \"{left}\" spawn \"{right}\""
+     ),
+     E1115 = _err(
+         "E1115",
+         Category.TYPE,
+         "Spawn target must be a node, edge, or collection thereof, got \"{type}\""
+     ),
      W1050 = _warn("W1050", Category.TYPE, "Unknown intrinsic JSX element '<{tag}>'"),
      W1051 = _warn(
          "W1051",
