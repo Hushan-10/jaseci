@@ -1047,6 +1047,37 @@ test "ability_trigger_archetype" {
     )}:\n" + "\n---\n".join(e.pretty_print() for e in e1117);
 }
 
+test "undefined_osp_position" {
+    # Issue #5885 gap 7: undefined names in OSP-shape positions
+    # (connect/disconnect typed-edge, ability trigger) must promote
+    # from `W2001` to `E2018`. The fixture has 5 such positions —
+    # 3 ability triggers (one bare, one tuple element, one union
+    # member) and 2 typed edge ops. The Ok cases must not emit
+    # E2018, and W2001 must not duplicate any of the promoted spans.
+    path = os.path.join(CHECKER_FIXTURES, "checker_undefined_osp_position.jac");
+    program = JacProgram();
+    program.compile(path, type_check=True);
+    e2018 = [
+        e
+        for e in program.errors_had
+        if e.code and e.code.code == "E2018"
+    ];
+    assert len(e2018) == 5 , f"Expected 5 E2018 (undefined name in OSP position), got {len(
+        e2018
+    )}:\n" + "\n---\n".join(e.pretty_print() for e in e2018);
+    promoted_spans = {(e.loc.first_line, e.loc.col_start) for e in e2018};
+    duplicate_w2001 = [
+        w
+        for w in program.warnings_had
+        if w.code
+        and w.code.code == "W2001"
+        and (w.loc.first_line, w.loc.col_start) in promoted_spans
+    ];
+    assert len(duplicate_w2001) == 0 , f"W2001 must not duplicate promoted E2018 spans, got: {[
+        w.pretty_print() for w in duplicate_w2001
+    ]}";
+}
+
 test "edge_ref_typed_result" {
     # Issue #5885 gap 6: typed `[edge ... ->:T:-> ...]` traversals must
     # propagate `T` as the list element type instead of degrading to
