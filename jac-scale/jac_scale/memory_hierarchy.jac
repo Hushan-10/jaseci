@@ -32,7 +32,7 @@ import from jaclang { JacRuntimeInterface as Jac }
 
 glob logger = logging.getLogger(__name__),
      # Process-level singletons shared across all requests in a worker process.
-     # Keys: 'mongo_client', 'mongo_available'
+     # Keys: 'mongo_client', 'mongo_available', 'redis_client', 'redis_available'
      _process_cache: dict[str, Any] = {};
 
 """Get fresh database config to support dynamic env var changes (e.g., testcontainers)."""
