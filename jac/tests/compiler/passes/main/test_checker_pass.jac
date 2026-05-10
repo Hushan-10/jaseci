@@ -1019,6 +1019,31 @@ test "disconnect_typed" {
     )}:\n" + "\n---\n".join(e.pretty_print() for e in e1098);
 }
 
+test "disconnect_op_no_w1051" {
+    # Issue #5885 gap 9: `del a --> b` (and its typed/reverse forms) used
+    # to fall through `apply_connect_or_disconnect` without setting a
+    # result type, so every disconnect site emitted a spurious W1051.
+    # The runtime returns `bool`, so the typed result is `bool` — and bare
+    # disconnect statements must produce no W1051 noise.
+    path = os.path.join(CHECKER_FIXTURES, "checker_disconnect_op_no_w1051.jac");
+    program = JacProgram();
+    mod = program.compile(path, options=NO_TC);
+    TypeCheckPass(ir_in=mod, prog=program);
+    w1051 = [
+        w
+        for w in program.warnings_had
+        if w.code and w.code.code == "W1051"
+    ];
+    assert len(w1051) == 0 , f"Expected no W1051 on disconnect ops, got {len(
+        w1051
+    )}:\n" + "\n---\n".join(w.pretty_print() for w in w1051);
+    # Disconnect must type as `bool` so that `removed: bool = a del --> b`
+    # is a clean assignment, not E1001 (Unknown -> bool).
+    assert len(program.errors_had) == 0 , f"Unexpected errors: {[
+        e.pretty_print() for e in program.errors_had
+    ]}";
+}
+
 test "ability_trigger_archetype" {
     # Walker abilities must trigger on a node/edge/Root; node/edge
     # abilities must trigger on a walker. Tuple and union triggers are

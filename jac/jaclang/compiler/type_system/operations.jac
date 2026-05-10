@@ -529,6 +529,12 @@ def get_type_of_binary_operation(
             if fcond is not None and fcond.f_type is not None {
                 validate_conn_type(fcond.f_type);
             }
+            # Disconnect compiles to `Jac.disconnect(...)` which returns
+            # `bool`. Returning UnknownType here used to flood every
+            # disconnect site with W1051 (issue #5885 gap 9).
+            if evaluator.prefetch and evaluator.prefetch.bool_class {
+                return evaluator._convert_to_instance(evaluator.prefetch.bool_class);
+            }
         }
     }
     # Spawn operator: `a spawn b` requires exactly one operand to be a
