@@ -1078,6 +1078,29 @@ test "undefined_osp_position" {
     ]}";
 }
 
+test "connect_unparameterized_collection" {
+    # Issue #5885 gap 8: `a ++> b` (and disconnect / typed-edge forms)
+    # used to silently accept bare `list` / `tuple` / `set` / `frozenset`
+    # operands because the runtime accepts any collection of nodes; the
+    # checker can't verify the element types. Each unparameterized
+    # operand now reports `E1118`. The fixture has 13 such positions
+    # (8 right-side connect, 2 left-side connect, 3 disconnect — one of
+    # which uses the typed-edge form). Good cases (parameterized list,
+    # list literal, single node) must produce no E1118.
+    path = os.path.join(CHECKER_FIXTURES, "checker_connect_unparameterized.jac");
+    program = JacProgram();
+    mod = program.compile(path, options=NO_TC);
+    TypeCheckPass(ir_in=mod, prog=program);
+    e1118 = [
+        e
+        for e in program.errors_had
+        if e.code and e.code.code == "E1118"
+    ];
+    assert len(e1118) == 13 , f"Expected 13 E1118 (unparameterized connect operand), got {len(
+        e1118
+    )}:\n" + "\n---\n".join(e.pretty_print() for e in e1118);
+}
+
 test "edge_ref_typed_result" {
     # Issue #5885 gap 6: typed `[edge ... ->:T:-> ...]` traversals must
     # propagate `T` as the list element type instead of degrading to

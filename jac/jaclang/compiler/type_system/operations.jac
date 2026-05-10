@@ -16,7 +16,8 @@ import from jaclang.jac0core.diagnostics {
     E1097,
     E1098,
     E1114,
-    E1115
+    E1115,
+    E1118
 }
 
 with entry {
@@ -371,6 +372,26 @@ def get_type_of_binary_operation(
                 isinstance(t, jtypes.ClassType) and t.is_node_type() and t.is_instance()
             );
         }
+        # If `t` is one of the connect-supported builtin collections
+        # (list/tuple/set/frozenset) without type arguments, return its
+        # class name. Otherwise return None. Used to surface E1118 at
+        # connect/disconnect operand sites where element-type validation
+        # would otherwise silently pass.
+        def unparameterized_connect_collection(t: jtypes.TypeBase) -> str | None {
+            if not isinstance(t, jtypes.ClassType) {
+                return None;
+            }
+            if not t.is_builtin() {
+                return None;
+            }
+            if t.shared.class_name not in ("list", "tuple", "set", "frozenset") {
+                return None;
+            }
+            if t.private.type_args and len(t.private.type_args) > 0 {
+                return None;
+            }
+            return t.shared.class_name;
+        }
         # Check whether a type is a valid node operand for connections.
         # Accepts: node instances, list of node instances, UnionType where all
         # members are valid, AnyType, and UnknownType (not enough info to diagnose).
@@ -391,12 +412,17 @@ def get_type_of_binary_operation(
                 if t.private.type_args and len(t.private.type_args) > 0 {
                     return is_valid_node_operand(t.private.type_args[0]);
                 }
-                return True;  # Unparameterized list - allow
+                # Unparameterized list — caller must surface E1118.
+                return False;
             }
             return False;
         }
         # TODO: In strict mode, UnknownType, AnyType, TypeVarType, and object should be errors
-        if not is_valid_node_operand(left_type) {
+        if (
+            left_unparam := unparameterized_connect_collection(left_type)
+        ) is not None {
+            evaluator.emit_diag(E1118, expr.left, side="left", type=left_unparam);
+        } elif not is_valid_node_operand(left_type) {
             evaluator.emit_diag(E1096, expr.left);
         }
         # Check if right operand is a valid node operand or a collection of node instances
@@ -407,27 +433,26 @@ def get_type_of_binary_operation(
             if not isinstance(t, jtypes.ClassType) {
                 return False;
             }
-            # Collection of node instances (list, tuple, set, frozenset)
+            # Collection of node instances (list, tuple, set, frozenset).
+            # Unparameterized collections are intercepted earlier via E1118.
             if (
                 t.is_builtin()
                 and t.shared.class_name in ("list", "tuple", "set", "frozenset")
             ) {
-                # If type_args are available, check them
                 if (t.private.type_args is not None and len(t.private.type_args) > 0) {
                     elem_type = t.private.type_args[0];
                     if is_valid_node_operand(elem_type) {
                         return True;
                     }
-                } else {
-                    # Unparameterized collection - allow it since element type
-                    # inference for list literals is not yet implemented (TODO).
-                    # In strict mode, this should be an error.
-                    return True;
                 }
             }
             return False;
         }
-        if not is_valid_right_operand(right_type) {
+        if (
+            right_unparam := unparameterized_connect_collection(right_type)
+        ) is not None {
+            evaluator.emit_diag(E1118, expr.right, side="right", type=right_unparam);
+        } elif not is_valid_right_operand(right_type) {
             evaluator.emit_diag(E1097, expr.right);
         }
         # Validate that a typed-edge expression resolves to an edge type.

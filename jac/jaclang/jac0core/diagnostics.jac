@@ -509,6 +509,13 @@ glob E0001 = _err("E0001", Category.SYNTAX, "Expected '{expected}', got '{got}'"
          Category.TYPE,
          "Node/edge ability trigger must be a walker, got \"{type}\""
      ),
+     E1118 = _err(
+         "E1118",
+         Category.TYPE,
+         "Connection {side} operand has unparameterized collection type \"{type}\";"
+         " element types cannot be verified — use \"{type}[NodeType]\" or pass a"
+         " concrete list of nodes instead"
+     ),
      W1050 = _warn("W1050", Category.TYPE, "Unknown intrinsic JSX element '<{tag}>'"),
      W1051 = _warn(
          "W1051",
