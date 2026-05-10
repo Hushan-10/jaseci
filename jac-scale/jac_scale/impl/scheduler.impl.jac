@@ -316,6 +316,8 @@ impl JacScaleScheduler._execute_task(
     name: str, username: str, is_walker: bool
 ) -> None {
     import asyncio;
+    import from jaclang { JacRuntimeInterface as Jac }
+    import from jaclang.jac0core.runtime { JacRuntime }
     label = 'walker' if is_walker else 'function';
     try {
         if self._server is None {
@@ -380,6 +382,8 @@ impl JacScaleScheduler._execute_task(
         }
     } except Exception as e {
         logger.error(f"Error executing {label} '{name}': {e}");
+    } finally {
+        JacRuntime.clear_request_context();
     }
 }
 
