@@ -208,6 +208,7 @@ impl MongoBackend.get(id: UUID) -> (Anchor | None) {
     if self.client is None {
         return None;
     }
+    self.fetch_count += 1;
     _id = to_uuid(id);
     try {
         db_obj = self.collection.find_one({'_id': str(_id)});
@@ -288,6 +289,7 @@ impl MongoBackend._write_to_db(anchor: Anchor) -> None {
     if self.client is None or not anchor.persistent {
         return;
     }
+    self.put_count += 1;
     _id = to_uuid(anchor.id);
     arch = anchor.archetype if anchor.is_populated() else None;
     try {
@@ -575,6 +577,7 @@ impl MongoBackend.batch_get(ids: list[UUID]) -> dict[UUID, Anchor] {
     if self.client is None or not ids {
         return result;
     }
+    self.fetch_count += len(ids);
     str_ids = [str(to_uuid(id)) for id in ids];
     try {
         for doc in self.collection.find({'_id': {'$in': str_ids}}) {
@@ -587,6 +590,12 @@ impl MongoBackend.batch_get(ids: list[UUID]) -> dict[UUID, Anchor] {
         logger.debug(f"MongoDB batch_get failed: {e}");
     }
     return result;
+}
+
+"""Reset get/put counters (for instrumentation/tests)."""
+impl MongoBackend.reset_counters -> None {
+    self.fetch_count = 0;
+    self.put_count = 0;
 }
 
 """Load anchor from raw MongoDB document, quarantining on failure."""
