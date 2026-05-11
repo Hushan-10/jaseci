@@ -348,7 +348,14 @@ impl install(
     import from jaclang.project.dependencies { DependencyInstaller }
     import from jaclang.project.dep_registry { get_dependency_registry }
 
-    config = get_config();
+    # force_discover bypasses the module-level cache, which may already hold
+    # the calling project's config when invoked from outside the target dir.
+    if editable {
+        src_dir: Path = Path(editable).resolve();
+        config = get_config(start_path=src_dir, force_discover=True);
+    } else {
+        config = get_config();
+    }
     if config is None {
         hint = "Clone the library repo and run 'jac install -e .' inside it."
             if editable
@@ -363,8 +370,6 @@ impl install(
         import site;
         import subprocess;
         import from jaclang.publish.builder { WheelBuilder }
-
-        src_dir: Path = Path(editable).resolve();
         console.print(
             f"\n📦 Editable install: [cyan]{config.project.name}[/cyan] "
             f"from [dim]{src_dir}[/dim]",

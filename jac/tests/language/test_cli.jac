@@ -20,7 +20,12 @@ import from jaclang.runtimelib.builtin { printgraph }
 glob JAC_ROOT = str(Path(jaclang.__file__).parent.parent),
      FIXTURES = os.path.join(JAC_ROOT, "tests", "language", "fixtures"),
      EXAMPLES = os.path.join(JAC_ROOT, "examples"),
-     _template_state = {"initialized": False};
+     _template_state = {"initialized": False},
+     _CONFIG_TOML = (
+         '[project]\nname = "test-project"\nversion = "1.0.0"\n'
+         'description = "A test project"\n\n'
+         '[run]\ncache = false\n\n[build]\ntypecheck = true\n\n[test]\nverbose = true\n'
+     );
 
 def fixture_path(filename: str) -> str {
     return os.path.join(FIXTURES, filename);
@@ -1134,6 +1139,80 @@ test "jac create default name jactastic" {
         assert project.create() == 0;
         assert (cli_dir / "jactastic2").is_dir();
     } finally {
+        os.chdir(original_cwd);
+        shutil.rmtree(_tmpdir, ignore_errors=True);
+    }
+}
+
+test "install editable resolves config from target package when outside project dir" {
+    import from unittest.mock { patch }
+
+    _tmpdir = tempfile.mkdtemp();
+    original_cwd = os.getcwd();
+    try {
+        pkg_dir = (Path(_tmpdir) / "my-lib").resolve();
+        pkg_dir.mkdir();
+        (pkg_dir / "jac.toml").write_text(
+            '[project]\nname = "my-lib"\nversion = "0.1.0"\ndescription = "Test lib"\nentry-point = "main.jac"\n'
+        );
+        # cwd has no jac.toml — install must not fall back to cwd
+        os.chdir(_tmpdir);
+
+        captured_src_dir = [];
+        def fake_install_editable(self: object, src_dir: object, site_pkgs: object) {
+            captured_src_dir.append(src_dir);
+        }
+
+        with patch(
+            "jaclang.publish.builder.WheelBuilder.install_editable",
+            fake_install_editable
+        ) {
+            result = project.install(editable=str(pkg_dir));
+        }
+
+        assert result == 0 , f"Expected success, got exit code {result}";
+        assert len(captured_src_dir) == 1 , "install_editable should be called once";
+        assert captured_src_dir[0] == pkg_dir , (
+            f"Expected src_dir={pkg_dir}, got {captured_src_dir[0]}"
+        );
+    } finally {
+        _reset_config();
+        os.chdir(original_cwd);
+        shutil.rmtree(_tmpdir, ignore_errors=True);
+    }
+}
+
+test "install editable resolves config from cwd when given dot path" {
+    import from unittest.mock { patch }
+
+    _tmpdir = tempfile.mkdtemp();
+    original_cwd = os.getcwd();
+    try {
+        resolved_tmpdir = Path(_tmpdir).resolve();
+        (resolved_tmpdir / "jac.toml").write_text(
+            '[project]\nname = "dot-lib"\nversion = "0.1.0"\ndescription = "Test lib"\nentry-point = "main.jac"\n'
+        );
+        os.chdir(_tmpdir);
+
+        captured_src_dir = [];
+        def fake_install_editable(self: object, src_dir: object, site_pkgs: object) {
+            captured_src_dir.append(src_dir);
+        }
+
+        with patch(
+            "jaclang.publish.builder.WheelBuilder.install_editable",
+            fake_install_editable
+        ) {
+            result = project.install(editable=".");
+        }
+
+        assert result == 0 , f"Expected success, got exit code {result}";
+        assert len(captured_src_dir) == 1 , "install_editable should be called once";
+        assert captured_src_dir[0] == resolved_tmpdir , (
+            f"Expected src_dir={resolved_tmpdir}, got {captured_src_dir[0]}"
+        );
+    } finally {
+        _reset_config();
         os.chdir(original_cwd);
         shutil.rmtree(_tmpdir, ignore_errors=True);
     }
