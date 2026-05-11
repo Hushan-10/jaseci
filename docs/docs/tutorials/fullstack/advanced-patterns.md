@@ -9,6 +9,9 @@ These patterns are drawn from [JacBuilder](https://github.com/jaseci-labs/jacBui
 > - Completed: [NPM Packages & UI Libraries](npm-and-libraries.md)
 > - Time: ~30 minutes
 
+!!! note "Browser globals and `jac check`"
+    Most snippets on this page reference browser globals (`Reflect`, `WebSocket`, `console`, `JSON`, `URL`, `String`, `Date`, `window`, `document`, `setTimeout`, `requestAnimationFrame`, `Promise`, etc.). These are provided by the JS runtime when the file is bundled with `jac start`, but the static checker does not yet ship typed stubs for them, so isolated `jac check` runs flag those names as Unknown. The patterns work as written at runtime; typed stubs land with the browser-globals story tracked as a separate type-checker improvement.
+
 ---
 
 ## WebSocket Client
