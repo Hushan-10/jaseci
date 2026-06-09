@@ -1752,9 +1752,7 @@ impl BaseLLM._invoke_streaming(
                     yield StreamEvent(
                         event_type="steps_done", data={"iterations": iter_count}
                     );
-                    final_answer = (
-                        str(resp.output) if resp.output is not None else ""
-                    );
+                    final_answer = str(resp.output) if resp.output is not None else "";
                     if final_answer {
                         yield StreamEvent(
                             event_type="chunk", data={"content": final_answer}
