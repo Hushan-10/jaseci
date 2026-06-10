@@ -1,6 +1,5 @@
 """Test logging=True streaming for a `-> str` agent when the model skips
 finish_tool and answers with plain text (the gpt-4o failure mode).
-
 """
 import from byllm.lib { MockLLM }
 import from byllm.types { StreamEvent }
