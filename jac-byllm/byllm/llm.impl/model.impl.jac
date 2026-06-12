@@ -97,45 +97,14 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
             result = super.invoke(mt_run);
         }
 
-        # For streaming (generator) results, wrap so ContextVar stays active
-        # during lazy iteration — tool calls inside the generator need the parent ID.
+        # Streaming results: restore caller's Context immediately, then hand
+        # back a generator that drives each next() inside a captured Context
+        # with the invocation_id pre-set. No token is ever reset across Context
+        # boundaries, so iteration is safe from a thread-pool executor (the
+        # pattern jac-scale's SSE microservice uses) or any other foreign Context.
         if isinstance(result, _types_mod.GeneratorType) {
-            def _wrap_generator(
-                gen: object,
-                mt: object,
-                model_name: str,
-                start: float,
-                ctx_token: object
-            ) -> object {
-                _completed = False;
-                try {
-                    yield from gen;
-                    _completed = True;
-                } except Exception as inner_e {
-                    _emit_agent_telemetry(
-                        mt,
-                        None,
-                        model_name,
-                        (time.time() - start) * 1000,
-                        "error",
-                        inner_e
-                    );
-                    raise;
-                } finally {
-                    if _completed {
-                        _emit_agent_telemetry(
-                            mt,
-                            "[streaming]",
-                            model_name,
-                            (time.time() - start) * 1000,
-                            "success",
-                            None
-                        );
-                    }
-                    _current_invocation_id.reset(ctx_token);
-                }
-            }
-            return _wrap_generator(result, mt_run, self.model_name, _start, _ctx_token);
+            _current_invocation_id.reset(_ctx_token);
+            return _stream_with_telemetry(result, mt_run, self.model_name, _start);
         }
 
         _emit_agent_telemetry(
@@ -154,6 +123,58 @@ impl Model.invoke(mt_run: MTRuntime) -> object {
         );
         _current_invocation_id.reset(_ctx_token);
         raise;
+    }
+}
+
+"""Yield from a streaming LLM generator while pinning the invocation_id
+ContextVar inside a captured contextvars.Context.
+
+Every next() call is driven via ctx.run(next, gen), so any nested by llm()
+call invoked during iteration sees mt._invocation_id as its parent, regardless
+of which thread or coroutine is iterating the wrapper. No reset of a ContextVar
+token across Context boundaries is performed, so this is safe to consume from a
+thread-pool executor (the pattern jac-scale's SSE microservice uses) or from any
+other Context-foreign consumer.
+"""
+def _stream_with_telemetry(
+    gen: object, mt: object, model_name: str, start: float
+) -> object {
+    import contextvars;
+    import time;
+
+    invocation_id = mt?._invocation_id;
+    ctx = contextvars.copy_context();
+    if invocation_id is not None {
+        ctx.run(_current_invocation_id.set, invocation_id);
+    }
+
+    _completed = False;
+    try {
+        while True {
+            try {
+                item = ctx.run(next, gen);
+            } except StopIteration {
+                _completed = True;
+                break;
+            }
+            yield item;
+        }
+    } except Exception as inner_e {
+        _emit_agent_telemetry(
+            mt, None, model_name, (time.time() - start) * 1000, "error", inner_e
+        );
+        raise;
+    } finally {
+        if _completed {
+            _emit_agent_telemetry(
+                mt,
+                "[streaming]",
+                model_name,
+                (time.time() - start) * 1000,
+                "success",
+                None
+            );
+        }
     }
 }
 
