@@ -95,6 +95,72 @@ impl classify_native_import(item: uni.UniNode) -> tuple {
     return (mod_name, mod_name is not None and mod_name in NATIVE_SUPPORTED_STDLIB);
 }
 
+impl native_capability_violations(mod: uni.Module) -> list {
+    import from jaclang.jac0core.passes.module_codegen_pass { ModuleCodegenPass }
+    import from jaclang.jac0core.constant { CodeContext }
+    out: list = [];
+    _stdlib_help: (str | None) = None;
+    # One NATIVE-context iteration covers both violation families. NOTE:
+    # NATIVE_DISQUALIFIER_NODES is deliberately NOT swept here - it is the
+    # AUTO-PROMOTION eligibility table, conservatively broader than what
+    # explicit na {} / .na.jac code can lower (LambdaExpr and the OSP forms
+    # are auto-promote disqualifiers but natively supported).
+    # Genuinely-unsupported node kinds remain the emitter fallbacks' job
+    # until a dedicated explicit-native rejection table is derived from
+    # them.
+    for stmt in ModuleCodegenPass.iter_context_stmts(mod, CodeContext.NATIVE) {
+        # Non-allowlisted Python imports in native context (issue #6357):
+        # the import would be dropped and member access would lower to
+        # garbage, so reject it loudly. Clib imports
+        # (`import from "lib" {...}`) and native module imports carry
+        # from_loc / clib_decls and are legal.
+        if isinstance(stmt, uni.Import) {
+            if stmt.clib_decls or not stmt.items {
+                continue;
+            }
+            for item in stmt.items {
+                (mod_name, _ok) = classify_native_import(item);
+                if mod_name is not None and not _ok {
+                    if _stdlib_help is None {
+                        _supported_list = ", ".join(
+                            f"`import {m}`" for m in sorted(NATIVE_SUPPORTED_STDLIB)
+                        );
+                        _stdlib_help = (
+                            f"Native compilation supports these stdlib imports: "
+                            f"{_supported_list}; C-library imports "
+                            f"(`import from \"lib\" {{...}}`); and other native "
+                            f"(.na.jac) modules (`import from mod {{...}}`). Move "
+                            f"Python-dependent code to a @sv/Python context."
+                        );
+                    }
+                    out.append((item, "Python module import", mod_name, _stdlib_help));
+                }
+            }
+            continue;
+        }
+        # Structural match patterns anywhere in the statement subtree.
+        # Flagged subtrees are not descended into, so one construct yields
+        # one violation, not a cascade.
+        work: list = [stmt];
+        while work {
+            nd = work.pop();
+            if isinstance(nd, NATIVE_REJECT_MATCH_PATTERNS) {
+                out.append((nd, "match pattern", type(nd).__name__, None));
+                continue;
+            }
+            if isinstance(nd, NATIVE_REJECT_NODES) {
+                kind = "expression" if isinstance(nd, uni.Expr) else "statement";
+                out.append((nd, kind, type(nd).__name__, None));
+                continue;
+            }
+            for k in nd.kid {
+                work.append(k);
+            }
+        }
+    }
+    return out;
+}
+
 impl module_native_compat(mod: uni.Module) -> bool {
     scan_mods = [mod] + list(mod.impl_mod) + list(mod.test_mod) + list(mod.variant_mod);
     has_entry = False;

@@ -1727,15 +1727,11 @@ impl EsastGenPass.exit_func_call(nd: uni.FuncCall) -> None {
         and isinstance(nd.target, uni.AtomTrailer)
     ) {
         import from jaclang.compiler.passes.ecmascript.es_unparse { JSCodeGenerator }
-        _obj_type = None;
-        try {
-            _te = self.prog.get_type_evaluator();
-            if _te {
-                _obj_type = _te.get_type_of_expression(nd.target.target);
-            }
-        } except Exception {
-            _obj_type = None;
-        }
+        # Stamp-ONLY receiver read (deliberately not the lazy central
+        # query): an unstamped receiver (e.g. an untyped comprehension
+        # element) must route through the _jac.poly.call runtime
+        # dispatcher rather than a statically-chosen primitive emitter.
+        _obj_type = nd.target.target?.type;
         _type_name = self._resolve_primitive_type_name(_obj_type);
         _method_name = callee.property.name;
         if _type_name {
@@ -2271,7 +2267,8 @@ impl EsastGenPass._resolve_primitive_type_name(_obj_type: object) -> str {
 """Try to dispatch an operator through the primitive emitter system.
 
 Returns an es.Expression (raw Identifier wrapping emitted JS) on success, or None
-if the type evaluator doesn't know the type or the emitter doesn't handle this op.
+if the expression's checker-stamped type is unknown or the emitter doesn't
+handle this op.
 """
 impl EsastGenPass._try_primitive_op(
     expr_node: uni.UniNode,
@@ -2281,19 +2278,13 @@ impl EsastGenPass._try_primitive_op(
     jac_node: uni.UniNode
 ) -> (es.Expression | None) {
     import from jaclang.compiler.passes.ecmascript.es_unparse { JSCodeGenerator }
-    _obj_type = None;
-    try {
-        _te = self.prog.get_type_evaluator();
-        if _te {
-            _obj_type = _te.get_type_of_expression(expr_node);
-        }
-    } except Exception {
-        _obj_type = None;
-    }
-    _type_name = self._resolve_primitive_type_name(_obj_type);
+    # Central expression-type read (see _expr_type_name).
+    import from jaclang.compiler.type_system.type_utils { expr_primitive_name }
+    _type_name = expr_primitive_name(self.prog, expr_node);
     if not _type_name {
         return None;
     }
+    self._ensure_emitters();
     _emitter = self._primitive_emitters.get(_type_name);
     _emit_fn = getattr(_emitter, emit_method, None) if _emitter else None;
     if not _emit_fn {
@@ -2318,16 +2309,11 @@ impl EsastGenPass._try_primitive_op(
 
 """Resolve the primitive type name of an expression, or "" if unknown."""
 impl EsastGenPass._expr_type_name(expr_node: uni.UniNode) -> str {
-    _obj_type = None;
-    try {
-        _te = self.prog.get_type_evaluator();
-        if _te {
-            _obj_type = _te.get_type_of_expression(expr_node);
-        }
-    } except Exception {
-        _obj_type = None;
-    }
-    return self._resolve_primitive_type_name(_obj_type);
+    # The sanctioned central read of an expression's primitive type
+    # (type_utils.expr_primitive_name): stamp when present, lazy authority
+    # query otherwise. The backend owns no type derivation here.
+    import from jaclang.compiler.type_system.type_utils { expr_primitive_name }
+    return expr_primitive_name(self.prog, expr_node);
 }
 
 """True if an expression is statically a collection whose JS truthiness and
@@ -6478,8 +6464,11 @@ impl EsastGenPass._resolve_spawn_walker(
     if not isinstance(stripped_node, uni.FuncCall) {
         return None;
     }
-    import from jaclang.compiler.symbol_utils { resolve_expr_symbol }
-    target_symbol = resolve_expr_symbol(stripped_node.target, self.get_main_mod());
+    # Checker-stamped symbol (Phase 2 contract); the name-based fallback
+    # below already covers sv-imported walkers the checker could not bind.
+    target_symbol = stripped_node.target.sym
+        if isinstance(stripped_node.target, uni.AtomExpr)
+        else None;
     # If symbol is found and is a walker, use it
     if target_symbol and (target_symbol.sym_type == SymbolType.WALKER_ARCH) {
         walker_name = target_symbol.sym_name;

@@ -118,6 +118,8 @@ obj NaIRGenPass(ModuleCodegenPass) {
         _foreign_modules: list = [],
         _foreign_structs: (dict | None) = None,
         _foreign_model_nmods: int = -1,
+        _foreign_fn_decls: (dict | None) = None,
+        _foreign_fns_nmods: int = -1,
         # Per-clib-function System V ABI plan (Phase 1 ABI lowering).
         # name -> {"params": [plan...], "ret": plan, "sret": bool}. This is the
         # single source of truth for how a foreign call is marshalled — it
@@ -194,6 +196,12 @@ obj NaIRGenPass(ModuleCodegenPass) {
         #   reads back the values reported during the walk (#6146).
         osp_reports_field: dict[str, int] = {},
         osp_thunk_funcs: dict[str, ir.Function] = {},
+        # OSP archetypes IMPORTED from another native module: name ->
+        #   (arch_kind, defining module name). Cross-module OSP lowering is
+        #   not supported until #6146 Phases 3-4 (tag numbering and the
+        #   __osp_setup tables are per-module), so spawn/connect/edge-ref on
+        #   these must E5090 with help naming the import (issue #6636).
+        imported_osp_archs: dict[str, tuple] = {},
         # The native-context osp_kernel module AST registered into this program
         # (None until _register_osp_kernel_module runs); NativeCompilePass links
         # its IR + glob-init.
@@ -453,6 +461,8 @@ obj NaIRGenPass(ModuleCodegenPass) {
     def _register_archetypes(module: uni.Module) -> None;
     # Object-Spatial kernel lowering (Phase 4 / issue #6146)
     def _register_osp_tags(archetypes: list[uni.Archetype]) -> None;
+    def _module_uses_osp(module: uni.Module) -> bool;
+    def _xmod_osp_help(names: list) -> (str | None);
     def _register_osp_kernel_module -> None;
     def _emit_osp_thunk(arch_name: str, method: uni.Ability) -> None;
     def _osp_trigger_names(nd: (uni.UniNode | None)) -> list[str];
@@ -796,14 +806,14 @@ obj NaIRGenPass(ModuleCodegenPass) {
     def _clib_struct_layout(name: str) -> tuple;
     # Memoized foreign declaration model over this pass's module universe.
     def _foreign_model -> dict;
+    # Memoized foreign function declarations (name -> {"params", "ret"}).
+    def _foreign_fns -> dict;
     # Ordered (field_name, nested_struct_name | None) pairs for a clib struct.
     def _foreign_fields_of(name: str) -> list;
     # Classify a clib struct for the active target's C ABI (dispatches to the
     # System V or AAPCS variant) into either MEMORY (indirect) or register
     # coerce types.
     def _classify_clib_struct(name: str) -> dict;
-    # Name of the (struct) type an annotation refers to, or None.
-    def _clib_type_name(type_expr: (uni.UniNode | None)) -> (str | None);
     # True if the clib struct has a field that is itself a clib struct.
     def _clib_has_nested(name: str) -> bool;
     # C-laid-out LLVM type for a clib struct (nested clib structs inlined).

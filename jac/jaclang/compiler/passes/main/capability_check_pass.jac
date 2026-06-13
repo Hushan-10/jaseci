@@ -49,12 +49,45 @@ glob NATIVE_SUPPORTED_STDLIB: set[str] = {"sys", "math", "time", "os", "random"}
 
      );
 
+# Match pattern forms the native backend cannot lower (structural
+# patterns). Declarative E5090 territory: swept pre-codegen by
+# native_capability_violations, alongside the disqualifier nodes above.
+glob NATIVE_REJECT_MATCH_PATTERNS: tuple = (
+         uni.MatchSequence,
+         uni.MatchMapping,
+         uni.MatchArch,
+         uni.MatchStar,
+
+     ),
+     # Node kinds with NO native lowering, rejected pre-codegen in explicit
+     # na {} / .na.jac code. DISTINCT from NATIVE_DISQUALIFIER_NODES (the
+     # auto-promotion eligibility table, conservatively broader - lambdas
+     # and the OSP statements are disqualifiers yet natively lowered).
+     # Every entry here is verified unsupported against the native suite:
+     #   - YieldExpr: generators have no native lowering.
+     #   - DisconnectOp: edge disconnect has no native lowering (connect
+     #     and traversal do - they ride the OSP kernel adjacency).
+     #   - PyInlineCode: ::py:: blocks cannot execute in a native binary;
+     #     before this table they were silently DROPPED in native context.
+     NATIVE_REJECT_NODES: tuple = (uni.YieldExpr, uni.DisconnectOp, uni.PyInlineCode, );
+
 """Classify a plain `import X;` item for the native pathway: returns
 (dotted_name, supported). `supported` is True exactly when the name is
 in NATIVE_SUPPORTED_STDLIB; a (name, False) result in native context is
-the E5090 rejection case (enforced post-coercion - see the table
-comment above)."""
+the E5090 rejection case (enforced by native_capability_violations)."""
 def classify_native_import(item: uni.UniNode) -> tuple;
+
+"""Declarative native-capability violations in `mod`'s native-context
+code: (node, kind, name, help_text | None) tuples ready to emit as
+E5090. Covers structural match patterns, the NATIVE_REJECT_NODES kinds,
+and non-allowlisted Python imports - NOT the auto-promotion disqualifier
+table, which is conservatively broader than what explicit native code
+can lower (see the table comments). Invoked by the native backend at the
+START of emission - after auto-promotion has coerced contexts, which is
+why this cannot run inside CapabilityCheckPass itself - so codegen-time
+E5090s remain only for value- and shape-conditional gaps the emitter
+discovers."""
+def native_capability_violations(mod: uni.Module) -> list;
 
 """Whether a module is eligible for native auto-promotion: it must have a
 `with entry` block and contain none of the disqualifying constructs (no
